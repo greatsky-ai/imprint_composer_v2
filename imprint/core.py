@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict, OrderedDict
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -677,6 +677,7 @@ class Graph:
         self._port_dims: Dict[Tuple[str, str], int] = {}
         self._module_devices: Dict[str, torch.device] = {}
         self._follow_targets: Dict[str, Optional[str]] = {}
+        self._event_listeners: List[Callable[[Dict[str, Any]], None]] = []
 
     # --- Construction APIs ---
 
@@ -767,12 +768,14 @@ class Graph:
         edge_buffers: Dict[Edge, Optional[torch.Tensor]] = {}
         results: Dict[str, torch.Tensor] = {}
 
+        self._notify_event("rollout_start", ticks=ticks)
         for module in self.modules.values():
             device = self._module_devices[module.name]
             module._prepare_for_rollout(self._batch_size or 0, ticks, device)
 
         self.clock._tick = 0
         for tick in range(ticks):
+            self._notify_event("tick_start", tick=tick)
             emitted_flags: Dict[str, bool] = {}
             for module in self.modules.values():
                 device = self._module_devices[module.name]
@@ -789,10 +792,30 @@ class Graph:
                 if module.should_emit_at(tick, follow_emitted):
                     for port, tensor in module._pending_outputs.items():
                         module._record_output(port, tensor)
+                        if isinstance(tensor, torch.Tensor):
+                            payload = {
+                                "tick": tick,
+                                "module": module.name,
+                                "port": port,
+                                "shape": tuple(tensor.shape),
+                                "dtype": str(tensor.dtype),
+                                "device": str(tensor.device),
+                            }
+                        else:
+                            payload = {
+                                "tick": tick,
+                                "module": module.name,
+                                "port": port,
+                                "shape": (),
+                                "dtype": None,
+                                "device": None,
+                            }
+                        self._notify_event("module_emit", **payload)
                     self._propagate_outputs(module, edge_buffers)
                     emitted_flags[module.name] = True
                 else:
                     emitted_flags[module.name] = False
+            self._notify_event("tick_end", tick=tick)
             self.clock.step()
 
         for module in self.modules.values():
@@ -804,6 +827,7 @@ class Graph:
             )
             for port, tensor in module.state.output.items():
                 results[f"{module.name}.{port}"] = tensor
+        self._notify_event("rollout_end", ticks=ticks)
         return results
 
     def loss(self) -> torch.Tensor:
@@ -837,6 +861,33 @@ class Graph:
             prefix = f"edge[{edge.name}]"
             for param_name, param in edge.proj.named_parameters():
                 yield f"{prefix}.{param_name}", param
+
+    # --- Event subscription ---------------------------------------------------
+
+    def register_event_listener(self, listener: Callable[[Dict[str, Any]], None]) -> None:
+        """
+        Register a callable that receives rollout event dictionaries.
+        """
+        if listener not in self._event_listeners:
+            self._event_listeners.append(listener)
+
+    def unregister_event_listener(self, listener: Callable[[Dict[str, Any]], None]) -> None:
+        """
+        Remove a previously registered rollout listener.
+        """
+        if listener in self._event_listeners:
+            self._event_listeners.remove(listener)
+
+    def _notify_event(self, event: str, **payload: Any) -> None:
+        if not self._event_listeners:
+            return
+        data = {"event": event, **payload}
+        for listener in list(self._event_listeners):
+            try:
+                listener(data)
+            except Exception:
+                # Listener errors should not break rollout.
+                continue
 
     # --- Internal helpers ----------------------------------------------------
 
