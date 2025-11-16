@@ -458,6 +458,10 @@ feat_t  = enc_slow.state.output["out"]      # [B, T, 320] (after 8 micro-steps p
 
 All the “loop K times” logic is hidden; you just specify `inner_steps=8`.
 
+Want a runnable version? `python examples/demo_micro_stepping.py` wires this graph to
+`imprint.data_helper.load_micro_step_demo_dataset`, so batch shapes, sequence length,
+and head dimensions are inferred directly from a DATASETS.md-style source.
+
 ---
 
 ## 5. Predictive-Coding-Like Micro-Circuit
