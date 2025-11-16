@@ -36,6 +36,7 @@ CONFIG = {
     "use_adamw": True,
     "weight_decay": 1e-2,
     "betas": (0.9, 0.95),
+    "val_every": 1,
 }
 
 
@@ -77,6 +78,11 @@ def run() -> None:
         split=cfg["split"],
         batch_size=cfg["batch_size"],
     )
+    val_dataset = load_micro_step_demo_dataset(
+        path=cfg["data_path"],
+        split="val",
+        batch_size=cfg["batch_size"],
+    )
 
     # Build graph using CONFIG and dataset metadata (fixed output dim).
     graph = build_graph(dataset)
@@ -99,9 +105,14 @@ def run() -> None:
         seed=cfg["seed"],
         grad_clip=cfg["grad_clip"],
         loss_fn=imprint.last_step_ce_loss(head_name="head", label_key="y"),
+        metric_fn=imprint.last_step_accuracy(head_name="head", label_key="y"),
         use_adamw=cfg["use_adamw"],
         weight_decay=cfg["weight_decay"],
         betas=cfg["betas"],
+        val_dataset=val_dataset,
+        val_every=cfg["val_every"],
+        val_loss_fn=imprint.last_step_ce_loss(head_name="head", label_key="y"),
+        val_metric_fn=imprint.last_step_accuracy(head_name="head", label_key="y"),
     )
 
     print("Done.")

@@ -47,6 +47,28 @@ def last_step_ce_loss(
         return torch.nn.functional.cross_entropy(logits, y.long())
     return _loss
 
+def last_step_accuracy(
+    *,
+    head_name: str = "head",
+    label_key: str = "y",
+) -> Callable[[Graph, dict], torch.Tensor]:
+    """
+    Classification accuracy on the final timestep logits of the given head vs batch[label_key].
+    Returns a scalar tensor accuracy in [0, 1].
+    """
+    def _acc(graph: Graph, batch: dict) -> torch.Tensor:
+        head = graph.modules[head_name]
+        logits = head.state.output["out"]
+        if logits.dim() == 3:
+            logits = logits[:, -1, :]
+        pred = logits.argmax(dim=-1)
+        y = batch[label_key]
+        if y.dim() > 1:
+            y = y.squeeze(-1)
+        correct = (pred == y.long()).float().mean()
+        return correct
+    return _acc
+
 
 def infer_num_classes(
     dataset: SequenceDataset,
