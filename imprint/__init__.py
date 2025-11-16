@@ -17,6 +17,8 @@ from .core import (
 
 from .objectives import Targets
 from .record import record
+from .data_helper import SequenceDataset, load_micro_step_demo_dataset
+from .training import train_graph
 from . import masks
 from . import protos
 
@@ -35,6 +37,9 @@ __all__ = [
     "Edge",
     "Targets",
     "record",
+    "SequenceDataset",
+    "load_micro_step_demo_dataset",
+    "train_graph",
     "masks",
     "protos",
 ]
