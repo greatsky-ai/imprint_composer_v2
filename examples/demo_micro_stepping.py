@@ -39,7 +39,7 @@ CONFIG = {
 }
 
 
-def build_graph(hidden_size: int, target_dim) -> imprint.Graph:
+def build_graph(dataset: SequenceDataset) -> imprint.Graph:
     """
     Build the micro-stepping graph described in §4 of USAGE.md.
     """
@@ -47,6 +47,8 @@ def build_graph(hidden_size: int, target_dim) -> imprint.Graph:
     graph = imprint.Graph(clock=clock)
 
     src = imprint.Source("x")
+    hidden_size = CONFIG["hidden_size"]
+    output_dim = imprint.infer_num_classes(dataset, override=CONFIG["num_classes"])
     enc_slow = imprint.Module(
         name="enc_slow",
         proto=imprint.protos.GRUStack(hidden=hidden_size, layers=1, layernorm=True),
@@ -56,7 +58,7 @@ def build_graph(hidden_size: int, target_dim) -> imprint.Graph:
     head = imprint.Module(
         name="head",
         proto=imprint.protos.MLP(widths=[Auto]),
-        ports=imprint.Ports(in_default=hidden_size, out_default=target_dim),
+        ports=imprint.Ports(in_default=hidden_size, out_default=output_dim),
         schedule=imprint.Rate(inner_steps=1, emit_every=1),
     )
 
@@ -76,16 +78,8 @@ def run() -> None:
         batch_size=cfg["batch_size"],
     )
 
-    # Fix head class dimension once to avoid per-batch rebind changes.
-    if cfg["num_classes"] is not None:
-        output_dim = int(cfg["num_classes"])
-    elif dataset.num_classes is not None:
-        output_dim = int(dataset.num_classes)  # computed over full dataset
-    elif getattr(dataset, "labels", None) is not None:
-        output_dim = int(dataset.labels.max().item()) + 1
-    else:
-        output_dim = dataset.target_dim
-    graph = build_graph(hidden_size=cfg["hidden_size"], target_dim=output_dim)
+    # Build graph using CONFIG and dataset metadata (fixed output dim).
+    graph = build_graph(dataset)
 
     # Prepare seq2static objective (CE on labels). Keep head emitting each tick.
     imprint.prepare_seq2static_classification(

@@ -48,3 +48,25 @@ def last_step_ce_loss(
     return _loss
 
 
+def infer_num_classes(
+    dataset: SequenceDataset,
+    *,
+    override: Optional[int] = None,
+) -> int:
+    """
+    Infer number of classes for classification from a dataset once:
+      - Prefer explicit override when provided.
+      - Else use dataset.num_classes when available.
+      - Else compute 1 + max(labels) if labels exist.
+      - Else fall back to dataset.target_dim.
+    """
+    if override is not None:
+        return int(override)
+    if dataset.num_classes is not None:
+        return int(dataset.num_classes)
+    labels = getattr(dataset, "labels", None)
+    if labels is not None:
+        return int(labels.max().item()) + 1
+    return int(dataset.target_dim)
+
+
