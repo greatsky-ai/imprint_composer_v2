@@ -578,6 +578,29 @@ class Module(nn.Module):
         for name, nodes in self._custom_output_nodes.items():
             self._pending_outputs[name] = self._render_custom_port(nodes)
 
+    # --- Parameter tag helpers ----------------------------------------------
+
+    def iter_parameters_by_tag(self, tag: str):
+        """
+        Yield parameters selected by a semantic tag.
+        Supported tags:
+          - 'proto_params': all parameters of the underlying proto
+          - 'recurrent_params': recurrent weight matrices in RNN protos (e.g., weight_hh)
+          - 'all_params': all module parameters (same as proto_params for now)
+        """
+        if tag in ("proto_params", "all_params"):
+            # Module.parameters() already yields proto parameters.
+            yield from self.parameters()
+            return
+        if tag == "recurrent_params":
+            named = getattr(self.proto, "named_parameters", None)
+            if callable(named):
+                for name, param in named():
+                    # Heuristic match covering common RNN implementations
+                    if ("weight_hh" in name) or ("recurrent" in name) or ("weight_hh_l" in name):
+                        yield param
+            return
+        raise ValueError(f"Unknown parameter tag {tag!r}")
 
 class Source(Module):
     """

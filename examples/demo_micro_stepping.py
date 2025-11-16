@@ -25,7 +25,7 @@ CONFIG = {
     "data_path": "ball_drop.h5",  # Optional HDF5 dataset path
     "split": "train",
     "batch_size": 128,
-    "hidden_size": 512,
+    "hidden_size": 128,
     "epochs": 12,
     "lr": 1e-3,
     "log_every": 5,
@@ -33,9 +33,9 @@ CONFIG = {
     "num_classes": None,
     "micro_steps": 1,
     "grad_clip": 1.0,
-    "use_adamw": True,
-    "weight_decay": 1e-2,
-    "betas": (0.9, 0.95),
+    #"use_adamw": True,
+    #"weight_decay": 1e-2,
+    #"betas": (0.9, 0.95),
     "val_every": 1,
 }
 
@@ -106,9 +106,9 @@ def run() -> None:
         grad_clip=cfg["grad_clip"],
         loss_fn=imprint.last_step_ce_loss(head_name="head", label_key="y"),
         metric_fn=imprint.last_step_accuracy(head_name="head", label_key="y"),
-        use_adamw=cfg["use_adamw"],
-        weight_decay=cfg["weight_decay"],
-        betas=cfg["betas"],
+        #use_adamw=cfg["use_adamw"],
+        #weight_decay=cfg["weight_decay"],
+        #betas=cfg["betas"],
         val_dataset=val_dataset,
         val_every=cfg["val_every"],
         # Validation will reuse training loss/metric by default

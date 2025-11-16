@@ -174,6 +174,21 @@ class Objectives:
     def activity_l2(self, on: str, weight: float = 1.0) -> None:
         self._terms.append({"kind": "activity_l2", "on": on, "weight": float(weight)})
 
+    # --- Parameter regularization (tag-based) ---
+    def params_l2(self, tag: str, weight: float = 1.0) -> None:
+        """
+        L2 regularization over parameters selected by a semantic tag.
+        Supported tags: 'proto_params', 'recurrent_params', 'all_params'
+        """
+        self._terms.append({"kind": "params_l2", "tag": tag, "weight": float(weight)})
+
+    def params_l1(self, tag: str, weight: float = 1.0) -> None:
+        """
+        L1 regularization over parameters selected by a semantic tag.
+        Supported tags: 'proto_params', 'recurrent_params', 'all_params'
+        """
+        self._terms.append({"kind": "params_l1", "tag": tag, "weight": float(weight)})
+
     def _port_tensor(self, port: str) -> torch.Tensor:
         if port not in self.module.state.output:
             raise ValueError(f"Module {self.module.name} has no recorded output for port {port!r}.")
@@ -233,6 +248,28 @@ class Objectives:
                     else:
                         loss = F.cross_entropy(pred, target_indices.long())
                     losses.append(weight * loss)
+                continue
+
+            if kind in {"params_l1", "params_l2"}:
+                tag = term["tag"]
+                # Accumulate across all selected parameters with mean reduction.
+                total = None
+                count = 0
+                for param in self.module.iter_parameters_by_tag(tag):  # type: ignore[attr-defined]
+                    p = param
+                    if kind == "params_l1":
+                        contrib = p.abs().sum()
+                    else:
+                        contrib = (p.square()).sum()
+                    total = contrib if total is None else total + contrib
+                    count += p.numel()
+                if total is not None and count > 0:
+                    losses.append(weight * (total / count))
+                else:
+                    # No matching params: contribute 0 on the right device
+                    param0 = next(self.module.parameters(), None)
+                    device = param0.device if param0 is not None else torch.device("cpu")
+                    losses.append(weight * torch.zeros((), device=device, dtype=torch.float32))
                 continue
 
             raise ValueError(f"Unsupported objective kind: {kind}")
