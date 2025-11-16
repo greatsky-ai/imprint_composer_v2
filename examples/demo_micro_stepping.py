@@ -31,10 +31,15 @@ CONFIG = {
     "log_every": 5,
     # Seq2static classification overrides; set to an int to force class count.
     "num_classes": None,
+    "micro_steps": 8,
+    "grad_clip": 1.0,
+    "use_adamw": True,
+    "weight_decay": 1e-2,
+    "betas": (0.9, 0.95),
 }
 
 
-def build_graph(hidden_size: int, target_dim: int) -> imprint.Graph:
+def build_graph(hidden_size: int, target_dim) -> imprint.Graph:
     """
     Build the micro-stepping graph described in §4 of USAGE.md.
     """
@@ -46,7 +51,7 @@ def build_graph(hidden_size: int, target_dim: int) -> imprint.Graph:
         name="enc_slow",
         proto=imprint.protos.GRUStack(hidden=hidden_size, layers=1, layernorm=True),
         ports=imprint.Ports(in_default=Auto, out_default=hidden_size),
-        schedule=imprint.Rate(inner_steps=1, emit_every=1),
+        schedule=imprint.Rate(inner_steps=CONFIG["micro_steps"], emit_every=1),
     )
     head = imprint.Module(
         name="head",
@@ -64,8 +69,6 @@ def build_graph(hidden_size: int, target_dim: int) -> imprint.Graph:
 
 def run() -> None:
     cfg = CONFIG
-    if cfg["seed"] is not None:
-        torch.manual_seed(cfg["seed"])
 
     dataset = load_micro_step_demo_dataset(
         path=cfg["data_path"],
@@ -73,40 +76,17 @@ def run() -> None:
         batch_size=cfg["batch_size"],
     )
 
-    print("Loaded dataset:", dataset.summary())
-    print(
-        f"Metadata → feature_dim={dataset.feature_dim}, "
-        f"target_dim={dataset.target_dim}, batches/epoch={dataset.batches_per_epoch}"
+    # Build with Auto head dim; dims will be inferred from the CE objective.
+    graph = build_graph(hidden_size=cfg["hidden_size"], target_dim=Auto)
+
+    # Prepare seq2static objective (emits once per sequence, CE on labels).
+    imprint.prepare_seq2static_classification(
+        graph,
+        dataset,
+        head_name="head",
+        label_key="y",
+        emit_once=True,
     )
-
-    # Determine number of classes for seq2static classification.
-    inferred_classes = dataset.num_classes
-    if cfg["num_classes"] is not None:
-        output_dim = int(cfg["num_classes"])
-    elif inferred_classes is not None:
-        output_dim = int(inferred_classes)
-    elif getattr(dataset, "labels", None) is not None:
-        # Derive class count from labels even if dtype is float in the HDF5.
-        labels = dataset.labels  # type: ignore[attr-defined]
-        max_label = int(labels.max().item())
-        output_dim = max_label + 1
-    else:
-        output_dim = dataset.target_dim
-
-    graph = build_graph(hidden_size=cfg["hidden_size"], target_dim=output_dim)
-
-    # Emit once per sequence for seq2static classification.
-    graph.modules["head"].schedule.emit_every = dataset.seq_len
-
-    # Seq2static classification: compute CE on the last timestep only.
-    def loss_fn(graph: imprint.Graph, batch: dict) -> torch.Tensor:
-        head = graph.modules["head"]
-        logits = head.state.output["out"]  # [B, T, C]
-        last_logits = logits[:, -1, :]
-        y = batch["y"]
-        if y.dim() > 1:
-            y = y.squeeze(-1)
-        return torch.nn.functional.cross_entropy(last_logits, y.long())
 
     imprint.train_graph(
         graph,
@@ -114,10 +94,11 @@ def run() -> None:
         epochs=cfg["epochs"],
         lr=cfg["lr"],
         log_every=cfg["log_every"],
-        seed=None,  # already seeded
-        loss_fn=loss_fn,
-        grad_clip=1.0,
-        use_adamw=True,
+        seed=cfg["seed"],
+        grad_clip=cfg["grad_clip"],
+        use_adamw=cfg["use_adamw"],
+        weight_decay=cfg["weight_decay"],
+        betas=cfg["betas"],
     )
 
     print("Done.")
