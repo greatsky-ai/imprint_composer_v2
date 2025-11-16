@@ -132,10 +132,12 @@ def train_graph(
             print(f"Epoch {epoch} average loss: {avg_loss:.4f}")
         history.append(avg_loss)
         if val_dataset is not None and val_every > 0 and (epoch % val_every) == 0:
-            val_loss = _eval_epoch(graph, val_dataset, loss_fn=val_loss_fn or loss_fn)
-            if val_metric_fn is not None:
-                # Run eval again to compute metric, sharing rollout is tricky; keep simple
-                val_acc = _eval_epoch(graph, val_dataset, loss_fn=val_metric_fn)
+            # Default to training loss/metric if not explicitly overridden.
+            eff_val_loss_fn = val_loss_fn or loss_fn
+            eff_val_metric_fn = val_metric_fn or metric_fn
+            val_loss = _eval_epoch(graph, val_dataset, loss_fn=eff_val_loss_fn)
+            if eff_val_metric_fn is not None:
+                val_acc = _eval_epoch(graph, val_dataset, loss_fn=eff_val_metric_fn)
                 print(f"[val after epoch {epoch}] avg_loss={val_loss:.4f} acc={val_acc:.4f}")
             else:
                 print(f"[val after epoch {epoch}] avg_loss={val_loss:.4f}")

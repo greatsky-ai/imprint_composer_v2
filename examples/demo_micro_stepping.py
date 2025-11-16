@@ -25,9 +25,9 @@ CONFIG = {
     "data_path": "ball_drop.h5",  # Optional HDF5 dataset path
     "split": "train",
     "batch_size": 128,
-    "hidden_size": 128,
+    "hidden_size": 512,
     "epochs": 12,
-    "lr": 0.5e-3,
+    "lr": 1e-3,
     "log_every": 5,
     # Seq2static classification overrides; set to an int to force class count.
     "num_classes": None,
@@ -111,8 +111,7 @@ def run() -> None:
         betas=cfg["betas"],
         val_dataset=val_dataset,
         val_every=cfg["val_every"],
-        val_loss_fn=imprint.last_step_ce_loss(head_name="head", label_key="y"),
-        val_metric_fn=imprint.last_step_accuracy(head_name="head", label_key="y"),
+        # Validation will reuse training loss/metric by default
     )
 
     print("Done.")
