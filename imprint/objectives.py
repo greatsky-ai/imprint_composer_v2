@@ -1,7 +1,6 @@
 # imprint/objectives.py
 
 from __future__ import annotations
-from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -61,25 +60,18 @@ def _ensure_time_alignment(
     return torch.cat([tensor, zeros], dim=1)
 
 
-def resolve_target(
+def _materialize_target_tensor(
     spec: TargetsSpec,
     batch: Dict[str, torch.Tensor],
     modules: Dict[str, "Module"],
-    *,
-    align_with: Optional[torch.Tensor] = None,
-    dtype: Optional[torch.dtype] = None,
 ) -> torch.Tensor:
-    """
-    Resolve a target specification into a tensor aligned with align_with.
-    """
     kind = spec[0]
-    device = align_with.device if align_with is not None else None
     if kind == "batch_key":
         key = spec[1]
         if key not in batch:
             raise KeyError(f"Batch is missing key {key!r} required for objective.")
-        tensor = batch[key]
-    elif kind == "shifted_input":
+        return batch[key]
+    if kind == "shifted_input":
         module_name, shift = spec[1], int(spec[2])
         if module_name not in modules:
             raise KeyError(f"Unknown module {module_name!r} in shifted_input target.")
@@ -93,47 +85,104 @@ def resolve_target(
             tensor = tensor[:, :shift, ...]
         if tensor.shape[1] == 0:
             raise ValueError("Shifted input target produced an empty sequence.")
-    elif kind == "port_drive":
+        return tensor
+    if kind == "port_drive":
         module_name, port = spec[1], spec[2]
         if module_name not in modules:
             raise KeyError(f"Unknown module {module_name!r} in port_drive target.")
         module = modules[module_name]
         if port not in module.state.input_drive:
             raise ValueError(f"Module {module_name} has no recorded drive for port {port!r}.")
-        tensor = module.state.input_drive[port]
-    else:
-        raise ValueError(f"Unsupported target spec type {kind!r}.")
+        return module.state.input_drive[port]
+    raise ValueError(f"Unsupported target spec type {kind!r}.")
 
-    if align_with is None:
-        if dtype is not None:
-            tensor = tensor.to(dtype=dtype)
-        return tensor
 
-    if tensor.dim() == align_with.dim() - 1:
-        tensor = tensor.unsqueeze(1)  # add time axis
-    if tensor.dim() < 3 and align_with.dim() >= 3:
-        tensor = tensor.unsqueeze(-1)
-
-    tensor = tensor.to(device=align_with.device)
-    tensor = _ensure_time_alignment(tensor, align_with.shape[1], align_with.device)
-
-    # Match trailing dims if possible via expand.
-    target_shape = align_with.shape
-    while tensor.dim() < align_with.dim():
+def _align_trailing_dims(
+    tensor: torch.Tensor,
+    reference_shape: Sequence[int],
+) -> torch.Tensor:
+    while tensor.dim() < len(reference_shape):
         tensor = tensor.unsqueeze(-1)
     trailing_src = tensor.shape[2:]
-    trailing_dst = target_shape[2:]
-    if trailing_src != trailing_dst:
-        if all(dim == 1 for dim in trailing_src):
-            tensor = tensor.expand(tensor.shape[0], tensor.shape[1], *trailing_dst)
-        else:
-            raise ValueError(
-                f"Cannot align target shape {tensor.shape} to required shape {target_shape}."
-            )
+    trailing_dst = reference_shape[2:]
+    if trailing_src == trailing_dst:
+        return tensor
+    if all(dim == 1 for dim in trailing_src):
+        expanded = tensor.expand(tensor.shape[0], tensor.shape[1], *trailing_dst)
+        return expanded
+    raise ValueError(
+        f"Cannot align target shape {tensor.shape} to required shape {tuple(reference_shape)}."
+    )
 
+
+def _align_to_reference(tensor: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
+    aligned = tensor
+    if aligned.dim() == reference.dim() - 1:
+        aligned = aligned.unsqueeze(1)
+    if aligned.dim() < 3 and reference.dim() >= 3:
+        aligned = aligned.unsqueeze(-1)
+    aligned = aligned.to(device=reference.device)
+    aligned = _ensure_time_alignment(aligned, reference.shape[1], reference.device)
+    return _align_trailing_dims(aligned, reference.shape)
+
+
+def resolve_target(
+    spec: TargetsSpec,
+    batch: Dict[str, torch.Tensor],
+    modules: Dict[str, "Module"],
+    *,
+    align_with: Optional[torch.Tensor] = None,
+    dtype: Optional[torch.dtype] = None,
+) -> torch.Tensor:
+    """
+    Resolve a target specification into a tensor aligned with align_with.
+    """
+    tensor = _materialize_target_tensor(spec, batch, modules)
+    if align_with is not None:
+        tensor = _align_to_reference(tensor, align_with)
     if dtype is not None:
         tensor = tensor.to(dtype=dtype)
     return tensor
+
+
+def _zero_scalar(module: "Module") -> torch.Tensor:
+    param = next(module.parameters(), None)
+    device = param.device if param is not None else torch.device("cpu")
+    return torch.zeros((), device=device, dtype=torch.float32)
+
+
+def _activity_penalty(tensor: torch.Tensor, kind: str) -> torch.Tensor:
+    if kind == "activity_l1":
+        return tensor.abs().mean()
+    return tensor.square().mean()
+
+
+def _parameter_penalty(module: "Module", tag: str, kind: str) -> torch.Tensor:
+    total: Optional[torch.Tensor] = None
+    count = 0
+    for param in module.iter_parameters_by_tag(tag):  # type: ignore[attr-defined]
+        contrib = param.abs().sum() if kind == "params_l1" else (param.square()).sum()
+        total = contrib if total is None else total + contrib
+        count += param.numel()
+    if total is None or count == 0:
+        return _zero_scalar(module)
+    return total / count
+
+
+def _cross_entropy_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    if target.dim() == pred.dim():
+        indices = target.argmax(dim=-1)
+    else:
+        indices = target.squeeze(-1)
+    while pred.dim() > 2 and indices.dim() < pred.dim() - 1:
+        indices = indices.unsqueeze(-1)
+    if pred.dim() == 3:
+        B, T, C = pred.shape
+        return F.cross_entropy(
+            pred.view(B * T, C),
+            indices.reshape(B * T).long(),
+        )
+    return F.cross_entropy(pred, indices.long())
 
 
 class Objectives:
@@ -196,9 +245,7 @@ class Objectives:
 
     def compute(self, batch: Dict[str, torch.Tensor], modules: Dict[str, Module]) -> torch.Tensor:
         if not self._terms:
-            param = next(self.module.parameters(), None)
-            device = param.device if param is not None else torch.device("cpu")
-            return torch.zeros((), device=device, dtype=torch.float32)
+            return _zero_scalar(self.module)
 
         losses: List[torch.Tensor] = []
         for term in self._terms:
@@ -209,14 +256,9 @@ class Objectives:
                 losses.append(weight * loss)
                 continue
 
-            if kind == "activity_l1":
+            if kind in {"activity_l1", "activity_l2"}:
                 tensor = self._port_tensor(term["on"])
-                losses.append(weight * tensor.abs().mean())
-                continue
-
-            if kind == "activity_l2":
-                tensor = self._port_tensor(term["on"])
-                losses.append(weight * (tensor.square().mean()))
+                losses.append(weight * _activity_penalty(tensor, kind))
                 continue
 
             if kind in {"mse", "ce"}:
@@ -231,45 +273,11 @@ class Objectives:
                 if kind == "mse":
                     losses.append(weight * F.mse_loss(pred, target))
                 else:
-                    # Cross-entropy expects logits [B, T, C] (or [B, C]) and integer targets.
-                    if target.dim() == pred.dim():
-                        # assume one-hot style target; convert to class indices
-                        target_indices = target.argmax(dim=-1)
-                    else:
-                        target_indices = target.squeeze(-1)
-                    while pred.dim() > 2 and target_indices.dim() < pred.dim() - 1:
-                        target_indices = target_indices.unsqueeze(-1)
-                    if pred.dim() == 3:
-                        B, T, C = pred.shape
-                        loss = F.cross_entropy(
-                            pred.view(B * T, C),
-                            target_indices.reshape(B * T).long(),
-                        )
-                    else:
-                        loss = F.cross_entropy(pred, target_indices.long())
-                    losses.append(weight * loss)
+                    losses.append(weight * _cross_entropy_loss(pred, target))
                 continue
 
             if kind in {"params_l1", "params_l2"}:
-                tag = term["tag"]
-                # Accumulate across all selected parameters with mean reduction.
-                total = None
-                count = 0
-                for param in self.module.iter_parameters_by_tag(tag):  # type: ignore[attr-defined]
-                    p = param
-                    if kind == "params_l1":
-                        contrib = p.abs().sum()
-                    else:
-                        contrib = (p.square()).sum()
-                    total = contrib if total is None else total + contrib
-                    count += p.numel()
-                if total is not None and count > 0:
-                    losses.append(weight * (total / count))
-                else:
-                    # No matching params: contribute 0 on the right device
-                    param0 = next(self.module.parameters(), None)
-                    device = param0.device if param0 is not None else torch.device("cpu")
-                    losses.append(weight * torch.zeros((), device=device, dtype=torch.float32))
+                losses.append(weight * _parameter_penalty(self.module, term["tag"], kind))
                 continue
 
             raise ValueError(f"Unsupported objective kind: {kind}")

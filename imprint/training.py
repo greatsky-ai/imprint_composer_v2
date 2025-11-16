@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
 import torch
@@ -7,81 +8,163 @@ import torch
 from .core import Graph
 from .data_helper import SequenceDataset
 
+Batch = Dict[str, torch.Tensor]
+LossFn = Optional[Callable[[Graph, Batch], torch.Tensor]]
 
-def _train_epoch(
-    graph: Graph,
-    dataset: SequenceDataset,
-    optimizer: Optional[torch.optim.Optimizer],
-    *,
-    epoch: int,
-    log_every: int,
-    lr: float,
-    loss_fn: Optional[Callable[[Graph, Dict[str, torch.Tensor]], torch.Tensor]] = None,
-    metric_fn: Optional[Callable[[Graph, Dict[str, torch.Tensor]], torch.Tensor]] = None,
-    grad_clip: Optional[float] = None,
-    use_adamw: bool = False,
-    weight_decay: float = 0.0,
-    betas: Optional[Tuple[float, float]] = None,
-) -> Tuple[float, float, Optional[float], torch.optim.Optimizer]:
-    total_loss = 0.0
-    total_metric = 0.0
-    steps = 0
-    last_loss_value = 0.0
-    for step, batch in enumerate(dataset.iter_batches(shuffle=True), start=1):
-        # Lazily construct parameters/optimizer on first batch via bind/rollout.
-        graph.rollout(batch)
-        if optimizer is None:
-            if use_adamw:
-                optimizer = torch.optim.AdamW(
-                    graph.parameters(),
-                    lr=lr,
-                    weight_decay=weight_decay,
-                    betas=betas or (0.9, 0.999),
-                )
-            else:
-                optimizer = torch.optim.Adam(
-                    graph.parameters(),
-                    lr=lr,
-                    betas=betas or (0.9, 0.999),
-                )
-        optimizer.zero_grad()
-        loss = loss_fn(graph, batch) if loss_fn is not None else graph.loss()
-        loss.backward()
-        if grad_clip is not None:
-            torch.nn.utils.clip_grad_norm_(graph.parameters(), grad_clip)
-        optimizer.step()
-        last_loss_value = float(loss.item())
-        total_loss += last_loss_value
-        steps += 1
-        if metric_fn is not None:
-            with torch.no_grad():
-                metric = metric_fn(graph, batch)
-                total_metric += float(metric.item())
 
-        if step % log_every == 0 or step == dataset.batches_per_epoch:
-            print(
-                f"[epoch {epoch}] step {step}/{dataset.batches_per_epoch} "
-                f"loss={loss.item():.4f}"
+@dataclass(frozen=True)
+class TrainLoopConfig:
+    epochs: int
+    lr: float
+    log_every: int
+    grad_clip: Optional[float] = None
+    use_adamw: bool = False
+    weight_decay: float = 0.0
+    betas: Optional[Tuple[float, float]] = None
+    val_every: int = 1
+
+
+@dataclass
+class EpochStats:
+    avg_loss: float
+    final_loss: float
+    avg_metric: Optional[float]
+
+
+class Trainer:
+    def __init__(
+        self,
+        graph: Graph,
+        dataset: SequenceDataset,
+        config: TrainLoopConfig,
+        *,
+        loss_fn: LossFn = None,
+        metric_fn: LossFn = None,
+        val_dataset: Optional[SequenceDataset] = None,
+        val_loss_fn: LossFn = None,
+        val_metric_fn: LossFn = None,
+    ) -> None:
+        self.graph = graph
+        self.dataset = dataset
+        self.config = config
+        self.loss_fn = loss_fn
+        self.metric_fn = metric_fn
+        self.val_dataset = val_dataset
+        self.val_loss_fn = val_loss_fn
+        self.val_metric_fn = val_metric_fn
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+
+    def run(self, *, seed: Optional[int] = None) -> List[float]:
+        if seed is not None:
+            torch.manual_seed(seed)
+        history: List[float] = []
+        for epoch in range(1, self.config.epochs + 1):
+            stats = self._train_epoch(epoch)
+            history.append(stats.avg_loss)
+            self._log_epoch(epoch, stats)
+            if (
+                self.val_dataset is not None
+                and self.config.val_every > 0
+                and (epoch % self.config.val_every) == 0
+            ):
+                self._log_validation(epoch)
+        return history
+
+    def _train_epoch(self, epoch: int) -> EpochStats:
+        total_loss = 0.0
+        total_metric = 0.0
+        steps = 0
+        last_loss_value = 0.0
+
+        for step, batch in enumerate(self.dataset.iter_batches(shuffle=True), start=1):
+            self.graph.rollout(batch)
+            optimizer = self._ensure_optimizer()
+            optimizer.zero_grad()
+            loss = self._compute_loss(batch)
+            loss.backward()
+            if self.config.grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(self.graph.parameters(), self.config.grad_clip)
+            optimizer.step()
+
+            last_loss_value = float(loss.item())
+            total_loss += last_loss_value
+            steps += 1
+
+            metric_value = self._compute_metric(batch)
+            if metric_value is not None:
+                total_metric += metric_value
+
+            if step % self.config.log_every == 0 or step == self.dataset.batches_per_epoch:
+                print(
+                    f"[epoch {epoch}] step {step}/{self.dataset.batches_per_epoch} "
+                    f"loss={last_loss_value:.4f}"
+                )
+
+        avg_metric = (total_metric / steps) if (self.metric_fn is not None and steps > 0) else None
+        avg_loss = total_loss / self.dataset.batches_per_epoch
+        return EpochStats(avg_loss=avg_loss, final_loss=last_loss_value, avg_metric=avg_metric)
+
+    def _ensure_optimizer(self) -> torch.optim.Optimizer:
+        if self.optimizer is not None:
+            return self.optimizer
+        betas = self.config.betas or (0.9, 0.999)
+        if self.config.use_adamw:
+            self.optimizer = torch.optim.AdamW(
+                self.graph.parameters(),
+                lr=self.config.lr,
+                weight_decay=self.config.weight_decay,
+                betas=betas,
             )
+        else:
+            self.optimizer = torch.optim.Adam(
+                self.graph.parameters(),
+                lr=self.config.lr,
+                betas=betas,
+            )
+        return self.optimizer
 
-    assert optimizer is not None
-    avg_metric = (total_metric / steps) if metric_fn is not None and steps > 0 else None
-    return total_loss / dataset.batches_per_epoch, last_loss_value, avg_metric, optimizer
+    def _compute_loss(self, batch: Batch) -> torch.Tensor:
+        if self.loss_fn is None:
+            return self.graph.loss()
+        return self.loss_fn(self.graph, batch)
 
+    def _compute_metric(self, batch: Batch) -> Optional[float]:
+        if self.metric_fn is None:
+            return None
+        with torch.no_grad():
+            metric = self.metric_fn(self.graph, batch)
+        return float(metric.item())
 
-@torch.no_grad()
-def _eval_epoch(
-    graph: Graph,
-    dataset: SequenceDataset,
-    *,
-    loss_fn: Optional[Callable[[Graph, Dict[str, torch.Tensor]], torch.Tensor]] = None,
-) -> float:
-    total = 0.0
-    for batch in dataset.iter_batches(shuffle=False):
-        graph.rollout(batch)
-        loss = loss_fn(graph, batch) if loss_fn is not None else graph.loss()
-        total += loss.item()
-    return total / dataset.batches_per_epoch
+    def _log_epoch(self, epoch: int, stats: EpochStats) -> None:
+        if stats.avg_metric is not None:
+            print(f"Epoch {epoch} final loss: {stats.final_loss:.4f} acc={stats.avg_metric:.4f}")
+        else:
+            print(f"Epoch {epoch} final loss: {stats.final_loss:.4f}")
+
+    def _log_validation(self, epoch: int) -> None:
+        assert self.val_dataset is not None
+        loss_hook = self.val_loss_fn or self.loss_fn
+        metric_hook = self.val_metric_fn or self.metric_fn
+        val_loss = self._evaluate(self.val_dataset, loss_hook)
+        if metric_hook is not None:
+            val_metric = self._evaluate(self.val_dataset, metric_hook)
+            print(f"[val after epoch {epoch}] avg_loss={val_loss:.4f} acc={val_metric:.4f}")
+        else:
+            print(f"[val after epoch {epoch}] avg_loss={val_loss:.4f}")
+
+    @torch.inference_mode()
+    def _evaluate(self, dataset: SequenceDataset, hook: LossFn) -> float:
+        total = 0.0
+        for batch in dataset.iter_batches(shuffle=False):
+            self.graph.rollout(batch)
+            value = self._invoke_hook(hook, batch)
+            total += float(value.item())
+        return total / dataset.batches_per_epoch
+
+    def _invoke_hook(self, hook: LossFn, batch: Batch) -> torch.Tensor:
+        if hook is None:
+            return self.graph.loss()
+        return hook(self.graph, batch)
 
 
 def train_graph(
@@ -92,57 +175,40 @@ def train_graph(
     lr: float,
     log_every: int,
     seed: Optional[int] = None,
-    loss_fn: Optional[Callable[[Graph, Dict[str, torch.Tensor]], torch.Tensor]] = None,
-    metric_fn: Optional[Callable[[Graph, Dict[str, torch.Tensor]], torch.Tensor]] = None,
+    loss_fn: LossFn = None,
+    metric_fn: LossFn = None,
     grad_clip: Optional[float] = None,
     use_adamw: bool = False,
     weight_decay: float = 0.0,
     betas: Optional[Tuple[float, float]] = None,
-    # Optional validation
     val_dataset: Optional[SequenceDataset] = None,
     val_every: int = 1,
-    val_loss_fn: Optional[Callable[[Graph, Dict[str, torch.Tensor]], torch.Tensor]] = None,
-    val_metric_fn: Optional[Callable[[Graph, Dict[str, torch.Tensor]], torch.Tensor]] = None,
+    val_loss_fn: LossFn = None,
+    val_metric_fn: LossFn = None,
 ) -> List[float]:
     """
-    Train a graph on a SequenceDataset using a simple SGD loop.
+    Train a graph on a SequenceDataset using an optimizer-backed loop.
 
     Returns a list of average loss values per epoch.
     """
-    if seed is not None:
-        torch.manual_seed(seed)
-    optimizer: Optional[torch.optim.Optimizer] = None
-    history: List[float] = []
-    for epoch in range(1, epochs + 1):
-        avg_loss, final_loss, avg_metric, optimizer = _train_epoch(
-            graph,
-            dataset,
-            optimizer,
-            epoch=epoch,
-            log_every=log_every,
-            lr=lr,
-            loss_fn=loss_fn,
-            metric_fn=metric_fn,
-            grad_clip=grad_clip,
-            use_adamw=use_adamw,
-            weight_decay=weight_decay,
-            betas=betas,
-        )
-        if avg_metric is not None:
-            print(f"Epoch {epoch} final loss: {final_loss:.4f} acc={avg_metric:.4f}")
-        else:
-            print(f"Epoch {epoch} final loss: {final_loss:.4f}")
-        history.append(avg_loss)
-        if val_dataset is not None and val_every > 0 and (epoch % val_every) == 0:
-            # Default to training loss/metric if not explicitly overridden.
-            eff_val_loss_fn = val_loss_fn or loss_fn
-            eff_val_metric_fn = val_metric_fn or metric_fn
-            val_loss = _eval_epoch(graph, val_dataset, loss_fn=eff_val_loss_fn)
-            if eff_val_metric_fn is not None:
-                val_acc = _eval_epoch(graph, val_dataset, loss_fn=eff_val_metric_fn)
-                print(f"[val after epoch {epoch}] avg_loss={val_loss:.4f} acc={val_acc:.4f}")
-            else:
-                print(f"[val after epoch {epoch}] avg_loss={val_loss:.4f}")
-    return history
-
-
+    config = TrainLoopConfig(
+        epochs=epochs,
+        lr=lr,
+        log_every=log_every,
+        grad_clip=grad_clip,
+        use_adamw=use_adamw,
+        weight_decay=weight_decay,
+        betas=betas,
+        val_every=val_every,
+    )
+    trainer = Trainer(
+        graph,
+        dataset,
+        config,
+        loss_fn=loss_fn,
+        metric_fn=metric_fn,
+        val_dataset=val_dataset,
+        val_loss_fn=val_loss_fn,
+        val_metric_fn=val_metric_fn,
+    )
+    return trainer.run(seed=seed)
