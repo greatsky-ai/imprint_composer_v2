@@ -9,7 +9,7 @@ its metadata drive module dimensions.
 from __future__ import annotations
 
 import argparse
-from typing import Iterable
+from typing import Iterable, Dict
 
 import torch
 
@@ -56,6 +56,18 @@ def graph_parameters(graph: imprint.Graph) -> Iterable[torch.nn.Parameter]:
     for module in graph.modules.values():
         for param in module.parameters():
             yield param
+
+
+def prime_graph(graph: imprint.Graph, dataset: SequenceDataset) -> Dict[str, torch.Tensor]:
+    """
+    Bind once to materialize proto parameters before the optimizer is created.
+    """
+    try:
+        probe_batch = next(dataset.iter_batches(shuffle=False))
+    except StopIteration as exc:  # pragma: no cover - defensive
+        raise RuntimeError("Dataset yielded no batches.") from exc
+    graph.bind(probe_batch)
+    return probe_batch
 
 
 def run_epoch(
@@ -116,6 +128,7 @@ def main() -> None:
     )
 
     graph = build_graph(hidden_size=args.hidden_size, target_dim=dataset.target_dim)
+    prime_graph(graph, dataset)
     params = list(graph_parameters(graph))
     if not params:
         raise RuntimeError("Graph has no trainable parameters.")
