@@ -31,7 +31,7 @@ CONFIG = {
     "log_every": 5,
     # Seq2static classification overrides; set to an int to force class count.
     "num_classes": None,
-    "micro_steps": 8,
+    "micro_steps": 1,
     "grad_clip": 1.0,
     "use_adamw": True,
     "weight_decay": 1e-2,
@@ -76,16 +76,24 @@ def run() -> None:
         batch_size=cfg["batch_size"],
     )
 
-    # Build with Auto head dim; dims will be inferred from the CE objective.
-    graph = build_graph(hidden_size=cfg["hidden_size"], target_dim=Auto)
+    # Fix head class dimension once to avoid per-batch rebind changes.
+    if cfg["num_classes"] is not None:
+        output_dim = int(cfg["num_classes"])
+    elif dataset.num_classes is not None:
+        output_dim = int(dataset.num_classes)  # computed over full dataset
+    elif getattr(dataset, "labels", None) is not None:
+        output_dim = int(dataset.labels.max().item()) + 1
+    else:
+        output_dim = dataset.target_dim
+    graph = build_graph(hidden_size=cfg["hidden_size"], target_dim=output_dim)
 
-    # Prepare seq2static objective (emits once per sequence, CE on labels).
+    # Prepare seq2static objective (CE on labels). Keep head emitting each tick.
     imprint.prepare_seq2static_classification(
         graph,
         dataset,
         head_name="head",
         label_key="y",
-        emit_once=True,
+        emit_once=False,
     )
 
     imprint.train_graph(
@@ -96,6 +104,7 @@ def run() -> None:
         log_every=cfg["log_every"],
         seed=cfg["seed"],
         grad_clip=cfg["grad_clip"],
+        loss_fn=imprint.last_step_ce_loss(head_name="head", label_key="y"),
         use_adamw=cfg["use_adamw"],
         weight_decay=cfg["weight_decay"],
         betas=cfg["betas"],
