@@ -22,10 +22,11 @@ def _train_epoch(
     use_adamw: bool = False,
     weight_decay: float = 0.0,
     betas: Optional[Tuple[float, float]] = None,
-) -> Tuple[float, Optional[float], torch.optim.Optimizer]:
+) -> Tuple[float, float, Optional[float], torch.optim.Optimizer]:
     total_loss = 0.0
     total_metric = 0.0
     steps = 0
+    last_loss_value = 0.0
     for step, batch in enumerate(dataset.iter_batches(shuffle=True), start=1):
         # Lazily construct parameters/optimizer on first batch via bind/rollout.
         graph.rollout(batch)
@@ -49,7 +50,8 @@ def _train_epoch(
         if grad_clip is not None:
             torch.nn.utils.clip_grad_norm_(graph.parameters(), grad_clip)
         optimizer.step()
-        total_loss += loss.item()
+        last_loss_value = float(loss.item())
+        total_loss += last_loss_value
         steps += 1
         if metric_fn is not None:
             with torch.no_grad():
@@ -64,7 +66,7 @@ def _train_epoch(
 
     assert optimizer is not None
     avg_metric = (total_metric / steps) if metric_fn is not None and steps > 0 else None
-    return total_loss / dataset.batches_per_epoch, avg_metric, optimizer
+    return total_loss / dataset.batches_per_epoch, last_loss_value, avg_metric, optimizer
 
 
 @torch.no_grad()
@@ -112,7 +114,7 @@ def train_graph(
     optimizer: Optional[torch.optim.Optimizer] = None
     history: List[float] = []
     for epoch in range(1, epochs + 1):
-        avg_loss, avg_metric, optimizer = _train_epoch(
+        avg_loss, final_loss, avg_metric, optimizer = _train_epoch(
             graph,
             dataset,
             optimizer,
@@ -127,9 +129,9 @@ def train_graph(
             betas=betas,
         )
         if avg_metric is not None:
-            print(f"Epoch {epoch} average loss: {avg_loss:.4f} acc={avg_metric:.4f}")
+            print(f"Epoch {epoch} final loss: {final_loss:.4f} acc={avg_metric:.4f}")
         else:
-            print(f"Epoch {epoch} average loss: {avg_loss:.4f}")
+            print(f"Epoch {epoch} final loss: {final_loss:.4f}")
         history.append(avg_loss)
         if val_dataset is not None and val_every > 0 and (epoch % val_every) == 0:
             # Default to training loss/metric if not explicitly overridden.
