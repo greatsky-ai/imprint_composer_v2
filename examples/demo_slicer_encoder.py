@@ -30,7 +30,7 @@ CONFIG = {
     "val_every": 1,
     "grad_clip": 1.0,
     "num_classes": None,
-    "num_chunks": 32,
+    "num_chunks": 16,
     "chunk_overlap": 0,
     "slicer_hidden": 128,
     "slicer_layers": 1,
