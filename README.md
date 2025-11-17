@@ -33,6 +33,7 @@ Imprint is a minimal, shapes‑driven toolkit for building and training modular 
 - Objectives and targets
   - Losses: `mse`, `ce`, `activity_l1`, `activity_l2`, plus user‑supplied callables.
   - Targets: `Targets.batch_key("y")`, `Targets.shifted_input(src, shift)`, `Targets.port_drive(module, "in")`.
+  - Fixed-point regularization for micro-stepping modules via `objectives.fixed_point_l2(...)`.
   - Parameter regularization (tag‑based): `params_l1(tag)`, `params_l2(tag)` with tags:
     - `proto_params`: all proto parameters
     - `recurrent_params`: common recurrent matrices (e.g., GRU/LSTM `weight_hh`)

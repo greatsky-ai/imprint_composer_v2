@@ -223,6 +223,12 @@ class Objectives:
     def activity_l2(self, on: str, weight: float = 1.0) -> None:
         self._terms.append({"kind": "activity_l2", "on": on, "weight": float(weight)})
 
+    def fixed_point_l2(self, on: str = "out", weight: float = 1.0) -> None:
+        """
+        Encourage consecutive inner steps to converge by penalizing deltas.
+        """
+        self._terms.append({"kind": "fixed_point_l2", "on": on, "weight": float(weight)})
+
     # --- Parameter regularization (tag-based) ---
     def params_l2(self, tag: str, weight: float = 1.0) -> None:
         """
@@ -259,6 +265,15 @@ class Objectives:
             if kind in {"activity_l1", "activity_l2"}:
                 tensor = self._port_tensor(term["on"])
                 losses.append(weight * _activity_penalty(tensor, kind))
+                continue
+
+            if kind == "fixed_point_l2":
+                history = self.module.state.inner_steps.get(term["on"])
+                if history is None or history.dim() < 3 or history.shape[2] < 2:
+                    losses.append(weight * _zero_scalar(self.module))
+                    continue
+                deltas = history[:, :, 1:, ...] - history[:, :, :-1, ...]
+                losses.append(weight * deltas.square().mean())
                 continue
 
             if kind in {"mse", "ce"}:

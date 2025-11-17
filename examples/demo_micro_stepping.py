@@ -23,7 +23,8 @@ Auto = imprint.Auto
 
 MODEL = {
     "hidden_size": 128,
-    "micro_steps": 1,
+    "micro_steps": 4,
+    "fixed_point_weight": 2,  # set >0 to encourage micro-step convergence
 }
 
 TRAINING = DemoConfig(
@@ -37,7 +38,7 @@ TRAINING = DemoConfig(
     train_split="train",
     val_split="val",
     data={
-        "path": "solids_32x32.h5",  # Optional HDF5 dataset path
+        "path": "ball_drop.h5",  # Optional HDF5 dataset path
         "batch_size": 128,
         "synth_total": 320,
         "synth_seq_len": 160,
@@ -73,6 +74,10 @@ def build_graph(dataset: SequenceDataset) -> imprint.Graph:
     graph.add(src, enc_slow, head)
     graph.connect(src["out"], enc_slow["in"])
     graph.connect(enc_slow["out"], head["in"])
+
+    fp_weight = MODEL.get("fixed_point_weight", 0.0)
+    if fp_weight:
+        enc_slow.objectives.fixed_point_l2(weight=fp_weight)
 
     return graph
 

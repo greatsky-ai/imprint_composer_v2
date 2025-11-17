@@ -374,6 +374,7 @@ class ModuleState:
         # port_name -> tensor [B, T, D_port]
         self.output: Dict[str, torch.Tensor] = {}
         self.recurrent: Any = None
+        self.inner_steps: Dict[str, torch.Tensor] = {}
 
 
 class Module(nn.Module):
@@ -421,6 +422,8 @@ class Module(nn.Module):
         self._last_layer_outputs: Optional[List[torch.Tensor]] = None
         self._input_history: Dict[str, List[torch.Tensor]] = defaultdict(list)
         self._output_history: Dict[str, List[torch.Tensor]] = defaultdict(list)
+        self._inner_step_history: Dict[str, List[torch.Tensor]] = defaultdict(list)
+        self._inner_step_buffers: Dict[str, List[torch.Tensor]] = defaultdict(list)
 
     def _register_input_ports(self) -> None:
         self._input_specs.clear()
@@ -532,10 +535,13 @@ class Module(nn.Module):
     def _prepare_for_rollout(self, batch_size: int, ticks: int, device: torch.device) -> None:
         self._input_history = defaultdict(list)
         self._output_history = defaultdict(list)
+        self._inner_step_history = defaultdict(list)
+        self._inner_step_buffers = defaultdict(list)
         self._pending_outputs = {}
         self._last_layer_outputs = None
         self.state.input_drive = {}
         self.state.output = {}
+        self.state.inner_steps = {}
         init_state = getattr(self.proto, "init_state", None)
         if callable(init_state):
             self.state.recurrent = init_state(batch_size, device=device)
@@ -547,6 +553,25 @@ class Module(nn.Module):
 
     def _record_output(self, port: str, tensor: torch.Tensor) -> None:
         self._output_history[port].append(tensor)
+
+    def _begin_inner_step_block(self) -> None:
+        self._inner_step_buffers = defaultdict(list)
+
+    def _record_inner_step_outputs(self) -> None:
+        if not self._pending_outputs:
+            return
+        for port, tensor in self._pending_outputs.items():
+            self._inner_step_buffers[port].append(tensor.clone())
+
+    def _end_inner_step_block(self) -> None:
+        if not self._inner_step_buffers:
+            return
+        for port, buffers in self._inner_step_buffers.items():
+            if not buffers:
+                continue
+            stacked = torch.stack(buffers, dim=1)  # [B, inner_steps, D]
+            self._inner_step_history[port].append(stacked)
+        self._inner_step_buffers = defaultdict(list)
 
     def _finalize_state(
         self,
@@ -576,6 +601,12 @@ class Module(nn.Module):
                     continue
                 output_tensors[port] = torch.zeros(batch_size, 0, dim, device=device)
         self.state.output = output_tensors
+
+        inner_step_tensors: Dict[str, torch.Tensor] = {}
+        for port, history in self._inner_step_history.items():
+            if history:
+                inner_step_tensors[port] = torch.stack(history, dim=1)  # [B, steps, inner, D]
+        self.state.inner_steps = inner_step_tensors
 
     # --- Stepping ------------------------------------------------------------
 
@@ -878,8 +909,11 @@ class Graph:
                         should_step = module.should_emit_at(tick, None)
                 if should_step:
                     inner_steps = module.schedule.inner_steps
+                    module._begin_inner_step_block()
                     for _ in range(inner_steps):
                         module._run_step(drive, tick)
+                        module._record_inner_step_outputs()
+                    module._end_inner_step_block()
                 else:
                     module._pending_outputs = {}
                     emitted_flags[module.name] = False

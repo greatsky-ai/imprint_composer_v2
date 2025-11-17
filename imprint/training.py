@@ -124,9 +124,7 @@ class Trainer:
         return self.optimizer
 
     def _compute_loss(self, batch: Batch) -> torch.Tensor:
-        if self.loss_fn is None:
-            return self.graph.loss()
-        return self.loss_fn(self.graph, batch)
+        return self._loss_with_objectives(self.loss_fn, batch)
 
     def _compute_metric(self, batch: Batch) -> Optional[float]:
         if self.metric_fn is None:
@@ -145,26 +143,36 @@ class Trainer:
         assert self.val_dataset is not None
         loss_hook = self.val_loss_fn or self.loss_fn
         metric_hook = self.val_metric_fn or self.metric_fn
-        val_loss = self._evaluate(self.val_dataset, loss_hook)
+        val_loss = self._evaluate_loss(self.val_dataset, loss_hook)
         if metric_hook is not None:
-            val_metric = self._evaluate(self.val_dataset, metric_hook)
+            val_metric = self._evaluate_metric(self.val_dataset, metric_hook)
             print(f"[val after epoch {epoch}] avg_loss={val_loss:.4f} acc={val_metric:.4f}")
         else:
             print(f"[val after epoch {epoch}] avg_loss={val_loss:.4f}")
 
     @torch.inference_mode()
-    def _evaluate(self, dataset: SequenceDataset, hook: LossFn) -> float:
+    def _evaluate_loss(self, dataset: SequenceDataset, hook: LossFn) -> float:
         total = 0.0
         for batch in dataset.iter_batches(shuffle=False):
             self.graph.rollout(batch)
-            value = self._invoke_hook(hook, batch)
+            value = self._loss_with_objectives(hook, batch)
             total += float(value.item())
         return total / dataset.batches_per_epoch
 
-    def _invoke_hook(self, hook: LossFn, batch: Batch) -> torch.Tensor:
+    @torch.inference_mode()
+    def _evaluate_metric(self, dataset: SequenceDataset, hook: LossFn) -> float:
+        total = 0.0
+        for batch in dataset.iter_batches(shuffle=False):
+            self.graph.rollout(batch)
+            value = hook(self.graph, batch)
+            total += float(value.item())
+        return total / dataset.batches_per_epoch
+
+    def _loss_with_objectives(self, hook: LossFn, batch: Batch) -> torch.Tensor:
+        objective = self.graph.loss()
         if hook is None:
-            return self.graph.loss()
-        return hook(self.graph, batch)
+            return objective
+        return hook(self.graph, batch) + objective
 
 
 def train_graph(
