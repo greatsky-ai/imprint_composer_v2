@@ -24,18 +24,18 @@ Auto = imprint.Auto
 
 
 MODEL = {
-    "num_chunks": 16,
+    "num_chunks": 32,
     "chunk_overlap": 0,
-    "slicer_hidden": 128,
+    "slicer_hidden": 64,
     "slicer_layers": 1,
     "slicer_inner_steps": 1,
-    "context_hidden": 128,
+    "context_hidden": 64,
     "context_layers": 1,
     "head_widths": [Auto],
 }
 
 TRAINING = DemoConfig(
-    seed=1561,
+    seed=11561,
     epochs=10,
     lr=1e-3,
     log_every=5,
@@ -87,10 +87,10 @@ def build_graph(
             layernorm=True,
             reset_every=reset_steps,
         ),
-        ports=imprint.Ports(out_default=MODEL["slicer_hidden"]),
+        ports=imprint.Ports(in_default=Auto, out_default=MODEL["slicer_hidden"]),
         schedule=imprint.Rate.slicer(stride, inner_steps=MODEL["slicer_inner_steps"]),
     )
-    slicer.enable_concat_input()
+
     context = imprint.Module(
         name="context",
         proto=imprint.protos.GRUStack(

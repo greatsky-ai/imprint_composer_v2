@@ -23,8 +23,8 @@ Auto = imprint.Auto
 
 MODEL = {
     "hidden_size": 128,
-    "micro_steps": 4,
-    "fixed_point_weight": 2,  # set >0 to encourage micro-step convergence
+    "micro_steps": 2,
+    "fixed_point_weight": 0.3,  # set >0 to encourage micro-step convergence
 }
 
 TRAINING = DemoConfig(
