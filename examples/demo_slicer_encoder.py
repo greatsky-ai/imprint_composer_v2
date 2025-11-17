@@ -32,7 +32,7 @@ CONFIG = {
     "num_classes": None,
     "num_chunks": 16,
     "chunk_overlap": 0,
-    "slicer_hidden": 128,
+    "slicer_hidden": 256,
     "slicer_layers": 1,
     "slicer_inner_steps": 1,
     "context_hidden": 128,
