@@ -23,9 +23,9 @@ Auto = imprint.Auto
 
 
 CONFIG = {
-    "seed": 111,
+    "seed": 151,
     "epochs": 10,
-    "lr": 2e-3,
+    "lr": 1e-3,
     "log_every": 5,
     "val_every": 1,
     "grad_clip": 1.0,
@@ -41,7 +41,7 @@ CONFIG = {
     "train_split": "train",
     "val_split": "val",
     "data": {
-        "path": "solids_32x32.h5",
+        "path": "ball_drop.h5",
         "batch_size": 128,
         "synth_total": 320,
         "synth_seq_len": 160,
@@ -82,7 +82,10 @@ def build_graph(
             layernorm=True,
             reset_every=reset_steps,
         ),
-        ports=imprint.Ports(in_default=Auto, out_default=CONFIG["slicer_hidden"]),
+        ports=imprint.Ports(
+            in_=imprint.InPort(size=Auto, combine="concat"),
+            out_default=CONFIG["slicer_hidden"],
+        ),
         schedule=imprint.Rate(inner_steps=CONFIG["slicer_inner_steps"], emit_every=stride),
     )
     context = imprint.Module(
@@ -109,9 +112,10 @@ def build_graph(
     )
 
     graph.add(src, slicer, context, head)
-    graph.connect(src["out"], slicer["in"])
+    graph.connect(src["out"], slicer["in"])      # input tokens to slicer               
     graph.connect(slicer["out"], context["in"])
     graph.connect(context["out"], head["in"])
+    #graph.connect(context["out"], slicer["in"])      # feedback tokens to slicer
 
     return graph
 

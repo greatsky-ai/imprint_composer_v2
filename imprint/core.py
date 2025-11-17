@@ -1132,7 +1132,7 @@ class Graph:
     def _materialize_edges(self) -> None:
         for edge in self.edges:
             src_dim = self._port_dims.get((edge.src.module.name, edge.src.name))
-            dst_dim = self._port_dims.get((edge.dst.module.name, edge.dst.name))
+            dst_dim = self._edge_destination_dim(edge)
             if src_dim is None or dst_dim is None:
                 raise ValueError(f"Edge {edge.name} has unresolved dimensions.")
             device = self._module_devices[edge.dst.module.name]
@@ -1152,6 +1152,18 @@ class Graph:
             max_abs = dst_module._input_max_abs.get(edge.dst.name)
             if max_abs is not None:
                 edge.proj.set_max_abs(max_abs)
+    
+    def _edge_destination_dim(self, edge: Edge) -> int:
+        module = edge.dst.module
+        port_name = edge.dst.name
+        spec = module._input_specs.get(port_name)
+        if isinstance(spec, InPort) and spec.combine == "concat":
+            dim = self._port_dims.get((edge.src.module.name, edge.src.name))
+        else:
+            dim = self._port_dims.get((module.name, port_name))
+        if dim is None:
+            raise ValueError(f"Unable to resolve destination dim for edge {edge.name}.")
+        return int(dim)
 
     def _prepare_modules(self) -> None:
         from . import protos  # Local import to avoid circular dependency
@@ -1223,7 +1235,11 @@ class Graph:
             for edge in edges:
                 value = edge_buffers.get(edge)
                 if value is None:
-                    value = torch.zeros(self._batch_size or 0, dim or 0, device=device)
+                    if edge.proj is not None:
+                        zeros_dim = edge.proj.out_features
+                    else:
+                        zeros_dim = dim or 0
+                    value = torch.zeros(self._batch_size or 0, zeros_dim, device=device)
                 tensors.append(value)
             if not tensors and dim is not None:
                 tensors.append(torch.zeros(self._batch_size or 0, dim, device=device))
