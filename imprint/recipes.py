@@ -1,12 +1,74 @@
 from __future__ import annotations
 
-from typing import Callable
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
 
 from .core import Graph
 from .objectives import Targets
-from .data_helper import SequenceDataset
+from .data_helper import SequenceDataset, load_demo_dataset
+from .training import train_graph
+
+
+@dataclass
+class DemoConfig:
+    """
+    Helper for demos/examples to standardize dataset + training boilerplate.
+    """
+
+    seed: int = 0
+    epochs: int = 5
+    lr: float = 1e-3
+    log_every: int = 10
+    val_every: int = 1
+    grad_clip: float = 1.0
+    num_classes: Optional[int] = None
+    train_split: str = "train"
+    val_split: str = "val"
+    data: Dict[str, Any] = field(default_factory=dict)
+
+    def load_datasets(self) -> Tuple[SequenceDataset, SequenceDataset]:
+        data_cfg = dict(self.data)
+        train = load_demo_dataset(split=self.train_split, **data_cfg)
+        val = load_demo_dataset(split=self.val_split, **data_cfg)
+        return train, val
+
+    def training_kwargs(self) -> Dict[str, Any]:
+        return {
+            "epochs": self.epochs,
+            "lr": self.lr,
+            "log_every": self.log_every,
+            "seed": self.seed,
+            "grad_clip": self.grad_clip,
+            "val_every": self.val_every,
+        }
+
+    def infer_num_classes(self, dataset: SequenceDataset) -> int:
+        return infer_num_classes(dataset, override=self.num_classes)
+
+    def train(
+        self,
+        graph: Graph,
+        dataset: SequenceDataset,
+        *,
+        loss_fn: Callable[[Graph, dict], torch.Tensor],
+        metric_fn: Callable[[Graph, dict], torch.Tensor],
+        val_dataset: Optional[SequenceDataset] = None,
+        **extra_train_kwargs: Any,
+    ) -> Any:
+        if val_dataset is None:
+            _, val_dataset = self.load_datasets()
+        kwargs = self.training_kwargs()
+        kwargs.update(extra_train_kwargs)
+        return train_graph(
+            graph,
+            dataset,
+            loss_fn=loss_fn,
+            metric_fn=metric_fn,
+            val_dataset=val_dataset,
+            **kwargs,
+        )
 
 
 def prepare_seq2static_classification(

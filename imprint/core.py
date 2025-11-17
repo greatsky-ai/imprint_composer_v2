@@ -93,6 +93,42 @@ class Rate:
             step_when_follow_emits=step_when_emits,
         )
 
+    @classmethod
+    def follow_emits(
+        cls,
+        module_or_name: Union[str, "Module"],
+        *,
+        inner_steps: int = 1,
+    ) -> "Rate":
+        """
+        Convenience constructor: follow another module and only step when it emits.
+        """
+        return cls(
+            inner_steps=inner_steps,
+            emit_every=1,
+            follow=module_or_name,
+            step_when_follow_emits=True,
+        )
+
+    @classmethod
+    def slicer(
+        cls,
+        stride: int,
+        *,
+        inner_steps: int = 1,
+    ) -> "Rate":
+        """
+        Convenience constructor for slicer-style encoders that emit every `stride` ticks.
+        """
+        return cls(inner_steps=inner_steps, emit_every=stride)
+
+    @classmethod
+    def micro(cls, inner_steps: int) -> "Rate":
+        """
+        Convenience constructor for micro-stepping modules that emit every tick.
+        """
+        return cls(inner_steps=inner_steps, emit_every=1)
+
 
 class InPort:
     """
@@ -426,6 +462,23 @@ class Module(nn.Module):
         kind = "input" if self._is_input_port(name) else "output"
         return PortRef(self, name, kind=kind)
 
+    def enable_concat_input(self, port: str = "in") -> None:
+        """
+        Ensure the given input port concatenates incoming edges instead of summing them.
+
+        Useful for feedback or multi-source fan-in without manually declaring an InPort.
+        """
+        spec = self._input_specs.get(port)
+        if spec is None:
+            if port != "in":
+                raise ValueError(f"Unknown input port {port!r} on module {self.name}.")
+            spec = InPort(size=self.ports.in_default if self.ports.in_default is not None else Auto, name=port)
+            self._input_specs[port] = spec
+        if isinstance(spec, InPortGroup):
+            raise ValueError(f"Port {port!r} on module {self.name} is a grouped input; concat override not supported.")
+        spec.combine = "concat"
+        self._input_specs[port] = spec
+
     # --- Weight constraint APIs ---
 
     def set_input_mask(
@@ -729,6 +782,24 @@ class Graph:
         self._structure_dirty = True
         return edge
 
+    def follow_when_emits(
+        self,
+        source: Union[str, Module],
+        *targets: Union[str, Module],
+    ) -> None:
+        """
+        Configure target modules to follow `source` and only step when it emits.
+        """
+        if not targets:
+            return
+        source_module = self._coerce_module(source)
+        for target in targets:
+            module = self._coerce_module(target)
+            module.schedule = Rate.follow(
+                source_module.name,
+                step_when_emits=True,
+            )
+
     def edge(
         self,
         name: Optional[str] = None,
@@ -914,6 +985,16 @@ class Graph:
                 continue
 
     # --- Internal helpers ----------------------------------------------------
+
+    def _coerce_module(self, module: Union[str, Module]) -> Module:
+        if isinstance(module, Module):
+            name = module.name
+            if name not in self.modules:
+                raise KeyError(f"Module {name!r} is not registered with this graph.")
+            return module
+        if module not in self.modules:
+            raise KeyError(f"Module {module!r} is not registered with this graph.")
+        return self.modules[module]
 
     def _ensure_structure(self) -> None:
         if not self._structure_dirty:

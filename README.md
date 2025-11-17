@@ -16,10 +16,12 @@ Imprint is a minimal, shapes‑driven toolkit for building and training modular 
 ## Features
 
 - Graph, Clock, Module, Ports, Edges
-- `Rate(inner_steps, emit_every, follow, step_when_emits)` enables micro‑stepping encoders, controlled
-  emissions, and lets downstream modules step only when their source emits (slicer/context patterns).
+- `Rate` helpers (`Rate.slicer`, `Rate.micro`, `Rate.follow_emits`) plus
+  `graph.follow_when_emits(...)` provide ergonomic scheduling for slicers,
+  micro-stepping encoders, and synchronous followers.
   - `Source("x")` injects external sequences (e.g., `batch["x"]`) as a module in the graph.
   - Auto dimension inference for ports/edges; named `Nodes` views for custom output ports.
+- `Module.enable_concat_input()` switches default ports to concatenation without manual `InPort`s.
 - Projections with constraints
   - Edges are backed by `MaskedLinear` and support persistent masks and per‑edge max‑abs clamps.
   - Modules can also apply input masks/limits per port.
@@ -44,6 +46,7 @@ Imprint is a minimal, shapes‑driven toolkit for building and training modular 
     - `loss_fn`, `metric_fn`
     - `grad_clip`, `use_adamw`, `weight_decay`, `betas`
     - `val_dataset`, `val_every` and optional `val_loss_fn`, `val_metric_fn` (default to training fns)
+- `recipes.DemoConfig` centralizes dataset loading, class inference, and training arguments for demos.
 - Recipes
   - `prepare_seq2static_classification(graph, dataset, head_name="head", label_key="y", emit_once=False)`
   - `last_step_ce_loss(...)`, `last_step_accuracy(...)`

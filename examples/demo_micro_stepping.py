@@ -15,28 +15,28 @@ import torch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import imprint
-from imprint import SequenceDataset, load_demo_dataset
+from imprint import SequenceDataset
+from imprint.recipes import DemoConfig
 
 Auto = imprint.Auto
 
 
-CONFIG = {
-    "seed": 7,
+MODEL = {
     "hidden_size": 128,
-    "epochs": 12,
-    "lr": 1e-3,
-    "log_every": 5,
-    # Seq2static classification overrides; set to an int to force class count.
-    "num_classes": None,
     "micro_steps": 1,
-    "grad_clip": 1.0,
-    #"use_adamw": True,
-    #"weight_decay": 1e-2,
-    #"betas": (0.9, 0.95),
-    "val_every": 1,
-    "train_split": "train",
-    "val_split": "val",
-    "data": {
+}
+
+TRAINING = DemoConfig(
+    seed=7,
+    epochs=12,
+    lr=1e-3,
+    log_every=5,
+    num_classes=None,
+    grad_clip=1.0,
+    val_every=1,
+    train_split="train",
+    val_split="val",
+    data={
         "path": "solids_32x32.h5",  # Optional HDF5 dataset path
         "batch_size": 128,
         "synth_total": 320,
@@ -44,7 +44,7 @@ CONFIG = {
         "synth_feature_dim": 64,
         "synth_seed": 7,
     },
-}
+)
 
 
 def build_graph(dataset: SequenceDataset) -> imprint.Graph:
@@ -55,13 +55,13 @@ def build_graph(dataset: SequenceDataset) -> imprint.Graph:
     graph = imprint.Graph(clock=clock)
 
     src = imprint.Source("x")
-    hidden_size = CONFIG["hidden_size"]
-    output_dim = imprint.infer_num_classes(dataset, override=CONFIG["num_classes"])
+    hidden_size = MODEL["hidden_size"]
+    output_dim = TRAINING.infer_num_classes(dataset)
     enc_slow = imprint.Module(
         name="enc_slow",
         proto=imprint.protos.GRUStack(hidden=hidden_size, layers=1, layernorm=True),
         ports=imprint.Ports(in_default=Auto, out_default=hidden_size),
-        schedule=imprint.Rate(inner_steps=CONFIG["micro_steps"], emit_every=1),
+        schedule=imprint.Rate.micro(MODEL["micro_steps"]),
     )
     head = imprint.Module(
         name="head",
@@ -78,17 +78,7 @@ def build_graph(dataset: SequenceDataset) -> imprint.Graph:
 
 
 def run() -> None:
-    cfg = CONFIG
-    data_cfg = dict(cfg["data"])
-
-    dataset = load_demo_dataset(
-        split=cfg["train_split"],
-        **data_cfg,
-    )
-    val_dataset = load_demo_dataset(
-        split=cfg["val_split"],
-        **data_cfg,
-    )
+    dataset, val_dataset = TRAINING.load_datasets()
 
     # Build graph using CONFIG and dataset metadata (fixed output dim).
     graph = build_graph(dataset)
@@ -102,22 +92,12 @@ def run() -> None:
         emit_once=False,
     )
 
-    imprint.train_graph(
+    TRAINING.train(
         graph,
         dataset,
-        epochs=cfg["epochs"],
-        lr=cfg["lr"],
-        log_every=cfg["log_every"],
-        seed=cfg["seed"],
-        grad_clip=cfg["grad_clip"],
         loss_fn=imprint.last_step_ce_loss(head_name="head", label_key="y"),
         metric_fn=imprint.last_step_accuracy(head_name="head", label_key="y"),
-        #use_adamw=cfg["use_adamw"],
-        #weight_decay=cfg["weight_decay"],
-        #betas=cfg["betas"],
         val_dataset=val_dataset,
-        val_every=cfg["val_every"],
-        # Validation will reuse training loss/metric by default
     )
 
     print("Done.")
