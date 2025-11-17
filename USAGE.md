@@ -458,9 +458,11 @@ feat_t  = enc_slow.state.output["out"]      # [B, T, 320] (after 8 micro-steps p
 
 All the “loop K times” logic is hidden; you just specify `inner_steps=8`.
 
-Want a runnable version? `python examples/demo_micro_stepping.py` wires this graph to
-`imprint.data_helper.load_micro_step_demo_dataset`, so batch shapes, sequence length,
-and head dimensions are inferred directly from a DATASETS.md-style source.
+Want runnable versions? `python examples/demo_micro_stepping.py` and
+`python examples/demo_slicer_encoder.py` both rely on
+`imprint.data_helper.load_demo_dataset(split=..., **config)` so batch shapes,
+sequence length, and head dimensions are inferred directly from a DATASETS.md-style source
+while still letting you override path, batch size, or synthetic stats in one place.
 
 ---
 

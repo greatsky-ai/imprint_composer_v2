@@ -17,7 +17,7 @@ from .core import (
 
 from .objectives import Targets
 from .record import record, Trace, Plan
-from .data_helper import SequenceDataset, load_micro_step_demo_dataset
+from .data_helper import SequenceDataset, load_demo_dataset
 from .training import train_graph
 from .recipes import prepare_seq2static_classification, last_step_ce_loss, last_step_accuracy, infer_num_classes
 from . import masks
@@ -41,7 +41,7 @@ __all__ = [
     "Trace",
     "Plan",
     "SequenceDataset",
-    "load_micro_step_demo_dataset",
+    "load_demo_dataset",
     "train_graph",
     "prepare_seq2static_classification",
     "last_step_ce_loss",

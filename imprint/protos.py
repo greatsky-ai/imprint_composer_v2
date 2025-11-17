@@ -23,6 +23,7 @@ class GRUStack(nn.Module):
         layers: int = 1,
         layernorm: bool = False,
         input_size: Optional[int] = None,
+        reset_every: Optional[int] = None,
     ) -> None:
         super().__init__()
         if layers < 1:
@@ -31,6 +32,10 @@ class GRUStack(nn.Module):
         self.layers = layers
         self.layernorm = layernorm
         self.input_size = input_size
+        if reset_every is not None and reset_every < 1:
+            raise ValueError("reset_every must be >= 1 when provided")
+        self.reset_every = int(reset_every) if reset_every is not None else None
+        self._steps_since_reset = 0
 
         self.cells = nn.ModuleList()
         self.norms = nn.ModuleList() if layernorm else None
@@ -57,6 +62,7 @@ class GRUStack(nn.Module):
         if self.input_size is None:
             raise RuntimeError("GRUStack.bind() must be called before init_state.")
         shape = (self.layers, batch_size, self.hidden)
+        self._steps_since_reset = 0
         return torch.zeros(shape, device=device)
 
     def step(
@@ -91,6 +97,11 @@ class GRUStack(nn.Module):
             layer_input = updated
 
         stacked = torch.stack(next_states, dim=0)
+        if self.reset_every is not None:
+            self._steps_since_reset += 1
+            if self._steps_since_reset >= self.reset_every:
+                stacked = torch.zeros_like(stacked)
+                self._steps_since_reset = 0
         return stacked, layer_outputs
 
 

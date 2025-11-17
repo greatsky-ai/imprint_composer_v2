@@ -15,16 +15,13 @@ import torch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import imprint
-from imprint import SequenceDataset, load_micro_step_demo_dataset
+from imprint import SequenceDataset, load_demo_dataset
 
 Auto = imprint.Auto
 
 
 CONFIG = {
     "seed": 7,
-    "data_path": "ball_drop.h5",  # Optional HDF5 dataset path
-    "split": "train",
-    "batch_size": 128,
     "hidden_size": 128,
     "epochs": 12,
     "lr": 1e-3,
@@ -37,6 +34,16 @@ CONFIG = {
     #"weight_decay": 1e-2,
     #"betas": (0.9, 0.95),
     "val_every": 1,
+    "train_split": "train",
+    "val_split": "val",
+    "data": {
+        "path": "ball_drop.h5",  # Optional HDF5 dataset path
+        "batch_size": 128,
+        "synth_total": 320,
+        "synth_seq_len": 160,
+        "synth_feature_dim": 64,
+        "synth_seed": 7,
+    },
 }
 
 
@@ -72,16 +79,15 @@ def build_graph(dataset: SequenceDataset) -> imprint.Graph:
 
 def run() -> None:
     cfg = CONFIG
+    data_cfg = dict(cfg["data"])
 
-    dataset = load_micro_step_demo_dataset(
-        path=cfg["data_path"],
-        split=cfg["split"],
-        batch_size=cfg["batch_size"],
+    dataset = load_demo_dataset(
+        split=cfg["train_split"],
+        **data_cfg,
     )
-    val_dataset = load_micro_step_demo_dataset(
-        path=cfg["data_path"],
-        split="val",
-        batch_size=cfg["batch_size"],
+    val_dataset = load_demo_dataset(
+        split=cfg["val_split"],
+        **data_cfg,
     )
 
     # Build graph using CONFIG and dataset metadata (fixed output dim).

@@ -53,6 +53,7 @@ class Rate:
       - inner_steps: number of internal compute steps per external clock tick.
       - emit_every: emit outputs every Nth external tick.
       - follow: optionally tie this module's emission schedule to another module.
+      - step_when_follow_emits: when True, skip stepping unless the follow target emitted.
 
     Notes:
       - When 'follow' is set, inner_steps/emit_every may be ignored or interpreted
@@ -64,6 +65,7 @@ class Rate:
         inner_steps: int = 1,
         emit_every: int = 1,
         follow: Optional[Union[str, "Module"]] = None,
+        step_when_follow_emits: bool = False,
     ) -> None:
         if inner_steps < 1:
             raise ValueError("inner_steps must be >= 1")
@@ -72,13 +74,24 @@ class Rate:
         self.inner_steps = inner_steps
         self.emit_every = emit_every
         self.follow = follow
+        self.step_when_follow_emits = bool(step_when_follow_emits)
 
     @classmethod
-    def follow(cls, module_or_name: Union[str, "Module"]) -> "Rate":
+    def follow(
+        cls,
+        module_or_name: Union[str, "Module"],
+        *,
+        step_when_emits: bool = False,
+    ) -> "Rate":
         """
         Convenience constructor: emit in lockstep with another module.
         """
-        return cls(inner_steps=1, emit_every=1, follow=module_or_name)
+        return cls(
+            inner_steps=1,
+            emit_every=1,
+            follow=module_or_name,
+            step_when_follow_emits=step_when_emits,
+        )
 
 
 class InPort:
@@ -784,11 +797,22 @@ class Graph:
                     if isinstance(tensor, dict):
                         continue
                     module._record_input_drive(port_name, tensor)
-                inner_steps = module.schedule.inner_steps
-                for _ in range(inner_steps):
-                    module._run_step(drive, tick)
                 follow_name = self._follow_targets.get(module.name)
                 follow_emitted = emitted_flags.get(follow_name) if follow_name else None
+                should_step = True
+                if module.schedule.step_when_follow_emits:
+                    if follow_name is not None:
+                        should_step = bool(follow_emitted)
+                    else:
+                        should_step = module.should_emit_at(tick, None)
+                if should_step:
+                    inner_steps = module.schedule.inner_steps
+                    for _ in range(inner_steps):
+                        module._run_step(drive, tick)
+                else:
+                    module._pending_outputs = {}
+                    emitted_flags[module.name] = False
+                    continue
                 if module.should_emit_at(tick, follow_emitted):
                     for port, tensor in module._pending_outputs.items():
                         module._record_output(port, tensor)

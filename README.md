@@ -16,7 +16,8 @@ Imprint is a minimal, shapes‑driven toolkit for building and training modular 
 ## Features
 
 - Graph, Clock, Module, Ports, Edges
-  - `Rate(inner_steps, emit_every, follow)` enables micro‑stepping encoders and controlled emissions.
+- `Rate(inner_steps, emit_every, follow, step_when_emits)` enables micro‑stepping encoders, controlled
+  emissions, and lets downstream modules step only when their source emits (slicer/context patterns).
   - `Source("x")` injects external sequences (e.g., `batch["x"]`) as a module in the graph.
   - Auto dimension inference for ports/edges; named `Nodes` views for custom output ports.
 - Projections with constraints
@@ -36,7 +37,7 @@ Imprint is a minimal, shapes‑driven toolkit for building and training modular 
     - `all_params`: same as `proto_params` (module‑level)
 - Data helpers
   - `SequenceDataset` (`[N, T, D]`) with metadata and batch iteration.
-  - `load_micro_step_demo_dataset(path=None, split="train", ...)` for synthetic or HDF5 data.
+  - `load_demo_dataset(path=None, split="train", ...)` for synthetic or HDF5 data.
 - Training helpers
   - `train_graph(graph, dataset, ...)` with:
     - `epochs`, `lr`, `log_every`, `seed`
@@ -138,8 +139,9 @@ imprint.train_graph(
 
 ## Prototypes (bind/step model)
 
-- `GRUStack(hidden, layers=1, layernorm=False)`
+- `GRUStack(hidden, layers=1, layernorm=False, reset_every=None)`
   - `bind(input_dim)` allocates cells; `init_state(batch_size, device)` allocates `[layers, B, hidden]`.
+  - Optional `reset_every` zeros the hidden state on a fixed cadence (e.g., per chunk for slicer encoders).
   - `step(drive, state)` returns `(new_state, [layer_outputs...])` with final output used as module `out`.
 - `MLP(widths=[..., Auto], act="relu")`
   - `bind(input_dim, output_dim)` constructs linear stack; final width can be `Auto` and inferred.
@@ -165,6 +167,9 @@ imprint.train_graph(
   - `iter_batches(shuffle=True, device=None)` → yields `{"x": ..., "y": ...}` when labels present.
 - HDF5 datasets
   - See `DATASETS.md` for layout. If an HDF5 path isn’t provided, the demo synthesizes a tiny set.
+- `load_demo_dataset` accepts a config/kwargs bundle (path, batch size, synthetic
+  sequence length, feature dimension, seed, etc.) so every example can share the same helper
+  without bespoke data-loading code.
 
 
 ## Extending
@@ -177,9 +182,10 @@ imprint.train_graph(
 
 ## Examples
 
-- `examples/demo_micro_stepping.py` demonstrates:
-  - A micro‑stepping encoder, simple head, seq2static CE objective, accuracy metric, and periodic validation.
-  - Inline `CONFIG` keeps all tunables in one place.
+- `examples/demo_micro_stepping.py`
+  - Micro‑stepping encoder with a next-step head wired up to the generalized data helper.
+- `examples/demo_slicer_encoder.py`
+  - Two-stage slicer/context GRU graph that chunks sequences via emission cadence and feeds a seq2static head.
 
 
 ## Tests
