@@ -25,19 +25,20 @@ Auto = imprint.Auto
 CONFIG: Dict[str, object] = {
     "seed": 5,
     "epochs": 5,
-    "lr": 1e-3,
+    "lr": 0.5e-3,
     "log_every": 5,
     "val_every": 1,
-    "grad_clip": 0.1,
+    "grad_clip": 1.0,
     "use_adamw": True,
     "weight_decay": 5e-2,
     "train_split": "train",
     "val_split": "val",
     "two_layers": True,
+    "use_feedback": False,
     "loss": {
         "rec": 0,
         "pred": 1,
-        "sparse_err": 0.2,
+        "sparse_err": 0.0,
     },
     "layers": [
         {
@@ -60,7 +61,7 @@ CONFIG: Dict[str, object] = {
     # Task head configuration (aux GRU consumes all PC GRU latents)
     "task": {
         "enabled": True,
-        "aux_hidden": 128,
+        "aux_hidden": 64,
         "aux_layers": 1,
         "head_widths": [Auto],
         # If labels are present, we use classification; otherwise we fall back to next-step MSE.
@@ -195,7 +196,7 @@ def _register_objectives(
     if predictor is not None and pred_w > 0:
         predictor.objectives.mse(
             "out",
-            Targets.shifted_input(source, +4),
+            Targets.shifted_input(source, +1),
             weight=pred_w,
             name="pred",
         )
@@ -234,7 +235,7 @@ def build_graph(dataset: SequenceDataset) -> imprint.Graph:
         layer = _add_pc_layer(graph, layer_spec, signal_src=signal)  # type: ignore[arg-type]
         built_layers.append(layer)
         signal = layer["err"]["out"]
-        if idx > 0:
+        if idx > 0 and bool(CONFIG.get("use_feedback", True)):
             _connect_top_down(graph, built_layers[idx], built_layers[idx - 1])
 
     predictor = None
