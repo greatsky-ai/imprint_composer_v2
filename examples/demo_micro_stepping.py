@@ -95,13 +95,15 @@ def run() -> None:
         head_name="head",
         label_key="y",
         emit_once=False,
+        register_objective=False,
     )
 
     train_kwargs = imprint.trainer_kwargs_from_config(cfg, val_dataset=val_dataset)
-    train_kwargs.update(
-        loss_fn=imprint.last_step_ce_loss(head_name="head", label_key="y"),
-        metric_fn=imprint.last_step_accuracy(head_name="head", label_key="y"),
+    train_kwargs["loss_fn"] = imprint.combined_graph_and_ce_loss(
+        head_name="head",
+        label_key="y",
     )
+    train_kwargs["metric_fn"] = imprint.last_step_accuracy(head_name="head", label_key="y")
 
     imprint.train_graph(
         graph,
