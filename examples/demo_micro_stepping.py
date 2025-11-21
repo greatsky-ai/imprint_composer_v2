@@ -26,7 +26,7 @@ CONFIG = {
     "log_every": 5,
     # Seq2static classification overrides; set to an int to force class count.
     "num_classes": None,
-    "micro_steps": 1,
+    "micro_steps": 4,
     "grad_clip": 1.0,
     #"use_adamw": True,
     #"weight_decay": 1e-2,

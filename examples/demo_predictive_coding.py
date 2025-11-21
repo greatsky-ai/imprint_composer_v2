@@ -28,15 +28,16 @@ CONFIG: Dict[str, object] = {
     "lr": 1e-3,
     "log_every": 5,
     "val_every": 1,
-    "grad_clip": 0.2,
+    "grad_clip": 0.1,
     "use_adamw": True,
-    "weight_decay": 2e-2,
+    "weight_decay": 5e-2,
     "train_split": "train",
     "val_split": "val",
+    "two_layers": True,
     "loss": {
-        "rec": 0.3,
-        "pred": 1.0,
-        "sparse_err": 0,
+        "rec": 0,
+        "pred": 1,
+        "sparse_err": 0.2,
     },
     "layers": [
         {
@@ -69,9 +70,6 @@ CONFIG: Dict[str, object] = {
         "head_name": "task_head",
         "weight": 1.0,        # relative weight for classification loss when combined with graph objectives
         "stop_grad": True,    # detach gradients from PC GRU outputs into aux (prevents upstream updates)
-        "use_top_only": False,# if True, feed only the highest PC GRU into aux (instead of all)
-        "include_raw_x": False,  # optionally also feed raw input x into aux for debugging
-        "include_errors": False, # optionally feed per-layer reconstruction errors into aux
     },
     "data": {
         "path": "solids_32x32.h5",
@@ -197,7 +195,7 @@ def _register_objectives(
     if predictor is not None and pred_w > 0:
         predictor.objectives.mse(
             "out",
-            Targets.shifted_input(source, +1),
+            Targets.shifted_input(source, +4),
             weight=pred_w,
             name="pred",
         )
@@ -228,7 +226,11 @@ def build_graph(dataset: SequenceDataset) -> imprint.Graph:
     signal = src["out"]
     built_layers: List[Dict[str, imprint.Module]] = []
 
-    for idx, layer_spec in enumerate(CONFIG["layers"]):  # type: ignore[index]
+    layer_specs = CONFIG["layers"]  # type: ignore[index]
+    if not bool(CONFIG.get("two_layers", True)):
+        layer_specs = layer_specs[:1]
+
+    for idx, layer_spec in enumerate(layer_specs):
         layer = _add_pc_layer(graph, layer_spec, signal_src=signal)  # type: ignore[arg-type]
         built_layers.append(layer)
         signal = layer["err"]["out"]
@@ -243,14 +245,7 @@ def build_graph(dataset: SequenceDataset) -> imprint.Graph:
     task_head = None
     if isinstance(task_cfg, dict):
         feature_refs = [layer["gru"]["out"] for layer in built_layers]
-        if feature_refs and bool(task_cfg.get("use_top_only", False)):
-            feature_refs = [feature_refs[-1]]
-        extra_refs = []
-        if bool(task_cfg.get("include_raw_x", False)):
-            extra_refs.append((src["out"], True))
-        if bool(task_cfg.get("include_errors", False)):
-            for layer in built_layers:
-                extra_refs.append((layer["err"]["out"], True))
+        extra_refs: List[tuple[imprint.PortRef, bool]] = []
         task_head = imprint.attach_task_head(
             graph,
             dataset=dataset,
