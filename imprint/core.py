@@ -1026,6 +1026,38 @@ class Graph:
                     output_dims[src_key] = dst_dim
                     changed = True
 
+            # Try to infer output dimensions for modules that support it (e.g. Elementwise)
+            for module in self.modules.values():
+                key = (module.name, "out")
+                if output_dims.get(key) is not None:
+                    continue
+                if hasattr(module.proto, "infer_output_dim"):
+                    mod_inputs = {}
+                    for (mname, pname), dim in input_dims.items():
+                        if mname != module.name or dim is None:
+                            continue
+                        # Skip InPortGroups; use their subports (leafs) instead
+                        spec = module._input_specs.get(pname)
+                        if isinstance(spec, InPortGroup):
+                            continue
+                        mod_inputs[pname] = dim
+                    
+                    if mod_inputs:
+                        inferred = module.proto.infer_output_dim(mod_inputs)
+                        if inferred is not None:
+                            output_dims[key] = inferred
+                            changed = True
+
+            # Try to infer output dimensions from objectives (targets)
+            for module in self.modules.values():
+                key = (module.name, "out")
+                if output_dims.get(key) is not None:
+                    continue
+                inferred = self._infer_output_dim_from_targets(module, batch, input_dims, output_dims)
+                if inferred is not None:
+                    output_dims[key] = inferred
+                    changed = True
+
         for module in self.modules.values():
             key = (module.name, "out")
             if output_dims.get(key) is None:

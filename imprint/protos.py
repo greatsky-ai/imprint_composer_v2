@@ -248,3 +248,8 @@ class Elementwise(nn.Module):
         if op == "mul":
             return a * b
         raise ValueError(f"Unsupported Elementwise op {op}")
+
+    def infer_output_dim(self, input_dims: Dict[str, int]) -> Optional[int]:
+        for dim in input_dims.values():
+            return dim
+        return None
