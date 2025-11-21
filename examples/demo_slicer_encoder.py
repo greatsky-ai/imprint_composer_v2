@@ -17,7 +17,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import imprint
-from imprint import SequenceDataset, load_demo_dataset
+from imprint import SequenceDataset
 
 Auto = imprint.Auto
 
@@ -124,8 +124,11 @@ def run() -> None:
     cfg = CONFIG
     data_cfg = dict(cfg["data"])
 
-    dataset = load_demo_dataset(split=cfg["train_split"], **data_cfg)
-    val_dataset = load_demo_dataset(split=cfg["val_split"], **data_cfg)
+    dataset, val_dataset = imprint.load_train_val_splits(
+        data_cfg,
+        train_split=str(cfg["train_split"]),  # type: ignore[index]
+        val_split=cfg.get("val_split", "val"),
+    )
 
     chunk_len, chunk_stride = _chunk_hparams(dataset)
     approx_chunks = math.ceil(dataset.seq_len / chunk_stride)
@@ -145,27 +148,17 @@ def run() -> None:
         register_objective=False,  # avoid double-counting CE across all timesteps
     )
 
-    # Use last-step CE for training and expose it to the logger as a named component
-    ce_loss = imprint.last_step_ce_loss(head_name="head", label_key="y")
-    def _loss(graph: imprint.Graph, batch: dict):
-        return ce_loss(graph, batch)
-    try:
-        _loss._components = {"head:ce": ce_loss}  # type: ignore[attr-defined]
-    except Exception:
-        pass
+    train_kwargs = imprint.trainer_kwargs_from_config(cfg, val_dataset=val_dataset)
+    train_kwargs["loss_fn"] = imprint.combined_graph_and_ce_loss(
+        head_name="head",
+        label_key="y",
+    )
+    train_kwargs["metric_fn"] = imprint.last_step_accuracy(head_name="head", label_key="y")
 
     imprint.train_graph(
         graph,
         dataset,
-        epochs=cfg["epochs"],
-        lr=cfg["lr"],
-        log_every=cfg["log_every"],
-        seed=cfg["seed"],
-        grad_clip=cfg["grad_clip"],
-        loss_fn=_loss,
-        metric_fn=imprint.last_step_accuracy(head_name="head", label_key="y"),
-        val_dataset=val_dataset,
-        val_every=cfg["val_every"],
+        **train_kwargs,  # type: ignore[arg-type]
     )
 
     print("Done.")

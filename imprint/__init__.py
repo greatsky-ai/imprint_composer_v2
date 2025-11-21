@@ -19,7 +19,17 @@ from .objectives import Targets
 from .record import record, Trace, Plan
 from .data_helper import SequenceDataset, load_demo_dataset
 from .training import train_graph
-from .recipes import prepare_seq2static_classification, last_step_ce_loss, last_step_accuracy, infer_num_classes
+from .recipes import (
+    prepare_seq2static_classification,
+    last_step_ce_loss,
+    last_step_accuracy,
+    infer_num_classes,
+    detect_task_mode,
+    load_train_val_splits,
+    trainer_kwargs_from_config,
+    combined_graph_and_ce_loss,
+    attach_task_head,
+)
 from . import masks
 from . import protos
 
@@ -47,6 +57,11 @@ __all__ = [
     "last_step_ce_loss",
     "last_step_accuracy",
     "infer_num_classes",
+    "detect_task_mode",
+    "load_train_val_splits",
+    "trainer_kwargs_from_config",
+    "combined_graph_and_ce_loss",
+    "attach_task_head",
     "masks",
     "protos",
 ]

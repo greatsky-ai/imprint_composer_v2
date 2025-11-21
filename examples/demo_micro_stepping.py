@@ -11,11 +11,9 @@ from __future__ import annotations
 import os
 import sys
 
-import torch
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import imprint
-from imprint import SequenceDataset, load_demo_dataset
+from imprint import SequenceDataset
 
 Auto = imprint.Auto
 
@@ -81,13 +79,10 @@ def run() -> None:
     cfg = CONFIG
     data_cfg = dict(cfg["data"])
 
-    dataset = load_demo_dataset(
-        split=cfg["train_split"],
-        **data_cfg,
-    )
-    val_dataset = load_demo_dataset(
-        split=cfg["val_split"],
-        **data_cfg,
+    dataset, val_dataset = imprint.load_train_val_splits(
+        data_cfg,
+        train_split=str(cfg["train_split"]),  # type: ignore[index]
+        val_split=cfg.get("val_split", "val"),
     )
 
     # Build graph using CONFIG and dataset metadata (fixed output dim).
@@ -102,22 +97,16 @@ def run() -> None:
         emit_once=False,
     )
 
+    train_kwargs = imprint.trainer_kwargs_from_config(cfg, val_dataset=val_dataset)
+    train_kwargs.update(
+        loss_fn=imprint.last_step_ce_loss(head_name="head", label_key="y"),
+        metric_fn=imprint.last_step_accuracy(head_name="head", label_key="y"),
+    )
+
     imprint.train_graph(
         graph,
         dataset,
-        epochs=cfg["epochs"],
-        lr=cfg["lr"],
-        log_every=cfg["log_every"],
-        seed=cfg["seed"],
-        grad_clip=cfg["grad_clip"],
-        loss_fn=imprint.last_step_ce_loss(head_name="head", label_key="y"),
-        metric_fn=imprint.last_step_accuracy(head_name="head", label_key="y"),
-        #use_adamw=cfg["use_adamw"],
-        #weight_decay=cfg["weight_decay"],
-        #betas=cfg["betas"],
-        val_dataset=val_dataset,
-        val_every=cfg["val_every"],
-        # Validation will reuse training loss/metric by default
+        **train_kwargs,  # type: ignore[arg-type]
     )
 
     print("Done.")

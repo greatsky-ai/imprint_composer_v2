@@ -16,7 +16,7 @@ from typing import Dict, List
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import imprint
-from imprint import SequenceDataset, load_demo_dataset
+from imprint import SequenceDataset
 from imprint.objectives import Targets
 
 Auto = imprint.Auto
@@ -25,10 +25,12 @@ Auto = imprint.Auto
 CONFIG: Dict[str, object] = {
     "seed": 5,
     "epochs": 5,
-    "lr": 0.5e-3,
+    "lr": 1e-3,
     "log_every": 5,
     "val_every": 1,
-    "grad_clip": 1.0,
+    "grad_clip": 0.2,
+    "use_adamw": True,
+    "weight_decay": 2e-2,
     "train_split": "train",
     "val_split": "val",
     "loss": {
@@ -42,7 +44,7 @@ CONFIG: Dict[str, object] = {
             "hidden": 128,
             "layers": 1,
             "decoder_widths": [128, Auto],
-            "out_dim": 16,
+            "out_dim": 32,
 
         },
         {
@@ -50,7 +52,7 @@ CONFIG: Dict[str, object] = {
             "hidden": 128,
             "layers": 1,
             "decoder_widths": [128, Auto],
-            "out_dim": 16,
+            "out_dim": 32,
         },
     ],
     "predictor_widths": [256, Auto],
@@ -171,77 +173,6 @@ def _add_predictor_head(
     return predictor
 
 
-def _add_aux_and_task_head(
-    graph: imprint.Graph,
-    *,
-    gru_latents: List[imprint.Module],
-    dataset: SequenceDataset,
-    source_module: imprint.Module | None = None,
-    pc_layers: List[Dict[str, imprint.Module]] | None = None,
-) -> imprint.Module | None:
-    """
-    Add an auxiliary GRU that consumes all PC GRU latents (concatenated) and feed a task head.
-    Returns the task head module or None if disabled.
-    """
-    task_cfg = CONFIG.get("task", {})  # type: ignore[assignment]
-    if not isinstance(task_cfg, dict) or not task_cfg.get("enabled", False):
-        return None
-
-    aux_hidden = int(task_cfg.get("aux_hidden", 160))
-    aux_layers = int(task_cfg.get("aux_layers", 1))
-    head_widths = task_cfg.get("head_widths", [Auto])  # type: ignore[assignment]
-    head_name = str(task_cfg.get("head_name", "task_head"))
-
-    # Determine whether dataset has labels (classification). If not, we'll fall back to next-step MSE.
-    try:
-        out_dim = imprint.infer_num_classes(dataset, override=task_cfg.get("num_classes", None))
-        classification_mode = out_dim is not None and int(out_dim) > 0
-    except Exception:
-        out_dim = None
-        classification_mode = False
-
-    aux_out_dim = task_cfg.get("aux_out_dim", None)
-    aux = imprint.Module(
-        name="pc_aux",
-        proto=imprint.protos.GRUStack(
-            hidden=aux_hidden,
-            layers=aux_layers,
-            layernorm=True,
-            out_dim=(None if aux_out_dim is None else int(aux_out_dim)),  # type: ignore[arg-type]
-        ),
-        ports=imprint.Ports(
-            in_=imprint.InPort(size=Auto, combine="concat"),
-            out_default=Auto,  # infer from proto.out_dim or hidden
-        ),
-    )
-    head = imprint.Module(
-        name=head_name,
-        proto=imprint.protos.MLP(widths=head_widths),  # type: ignore[arg-type]
-        ports=imprint.Ports(
-            in_default=Auto,  # infer from aux out
-            out_default=(out_dim if classification_mode else Auto),  # Auto when using MSE fallback
-        ),
-    )
-    graph.add(aux, head)
-    # Optionally restrict to the highest PC GRU only
-    sources = [gru_latents[-1]] if bool(task_cfg.get("use_top_only", False)) and gru_latents else list(gru_latents)
-    for gru in sources:
-        e = graph.connect(gru["out"], aux["in"])
-        # Control whether task loss updates upstream PC GRUs.
-        e.set_stop_grad(bool(task_cfg.get("stop_grad", True)))
-    # Optional debug fan-in: include raw x and/or per-layer error signals
-    if bool(task_cfg.get("include_raw_x", False)) and source_module is not None:
-        e = graph.connect(source_module["out"], aux["in"])
-        e.set_stop_grad(True)  # ensure task loss cannot update the source data path
-    if bool(task_cfg.get("include_errors", False)) and pc_layers is not None:
-        for layer in pc_layers:
-            e = graph.connect(layer["err"]["out"], aux["in"])
-            e.set_stop_grad(True)
-    graph.connect(aux["out"], head["in"])
-
-    return head
-
-
 def _register_objectives(
     layers: List[Dict[str, imprint.Module]],
     *,
@@ -308,31 +239,36 @@ def build_graph(dataset: SequenceDataset) -> imprint.Graph:
     if float(CONFIG["loss"]["pred"]) > 0:  # type: ignore[index]
         predictor = _add_predictor_head(graph, built_layers[0]["gru"])
 
-    # Add auxiliary GRU that consumes all GRU latents and a task head that trains via task loss
-    task_head = _add_aux_and_task_head(
-        graph,
-        gru_latents=[layer["gru"] for layer in built_layers],
-        dataset=dataset,
-        source_module=src,
-        pc_layers=built_layers,
-    )
-
-    # If labels exist, prepare seq2static classification on the specified head.
     task_cfg = CONFIG.get("task", {})  # type: ignore[assignment]
-    if isinstance(task_cfg, dict) and task_cfg.get("enabled", False):
-        try:
-            out_dim = imprint.infer_num_classes(dataset, override=task_cfg.get("num_classes", None))
-            classification_mode = out_dim is not None and int(out_dim) > 0
-        except Exception:
-            classification_mode = False
-        if classification_mode and task_head is not None:
+    task_head = None
+    if isinstance(task_cfg, dict):
+        feature_refs = [layer["gru"]["out"] for layer in built_layers]
+        if feature_refs and bool(task_cfg.get("use_top_only", False)):
+            feature_refs = [feature_refs[-1]]
+        extra_refs = []
+        if bool(task_cfg.get("include_raw_x", False)):
+            extra_refs.append((src["out"], True))
+        if bool(task_cfg.get("include_errors", False)):
+            for layer in built_layers:
+                extra_refs.append((layer["err"]["out"], True))
+        task_head = imprint.attach_task_head(
+            graph,
+            dataset=dataset,
+            config=task_cfg,
+            feature_refs=feature_refs,
+            extra_refs=extra_refs,
+        )
+        is_classification, _ = imprint.detect_task_mode(
+            dataset, num_classes_override=task_cfg.get("num_classes", None)
+        )
+        if is_classification and task_head is not None:
             imprint.prepare_seq2static_classification(
                 graph,
                 dataset,
                 head_name=str(task_cfg.get("head_name", "task_head")),
                 label_key=str(task_cfg.get("label_key", "y")),
                 emit_once=bool(task_cfg.get("emit_once", False)),
-                register_objective=False,  # we'll add CE via combined training loss (final step)
+                register_objective=False,
             )
 
     _register_objectives(built_layers, predictor=predictor, source=src, task_head=task_head, dataset=dataset)
@@ -343,75 +279,33 @@ def run() -> None:
     cfg = CONFIG
     data_cfg = dict(cfg["data"])  # type: ignore[index]
 
-    dataset = load_demo_dataset(split=cfg["train_split"], **data_cfg)  # type: ignore[index]
-    val_dataset = load_demo_dataset(split=cfg["val_split"], **data_cfg)  # type: ignore[index]
+    dataset, val_dataset = imprint.load_train_val_splits(
+        data_cfg,
+        train_split=str(cfg["train_split"]),  # type: ignore[index]
+        val_split=cfg.get("val_split", "val"),  # type: ignore[arg-type]
+    )
 
     graph = build_graph(dataset)
 
-    # Build training kwargs and conditionally include task loss/metric if classification labels are present.
-    train_kwargs = dict(
-        epochs=cfg["epochs"],  # type: ignore[index]
-        lr=cfg["lr"],  # type: ignore[index]
-        log_every=cfg["log_every"],  # type: ignore[index]
-        seed=cfg["seed"],  # type: ignore[index]
-        grad_clip=cfg["grad_clip"],  # type: ignore[index]
-        val_dataset=val_dataset,
-        val_every=cfg["val_every"],  # type: ignore[index]
-    )
-    task_cfg = CONFIG.get("task", {})  # type: ignore[assignment]
-    include_task_loss = False
+    train_kwargs = imprint.trainer_kwargs_from_config(cfg, val_dataset=val_dataset)
+    task_cfg = cfg.get("task", {})  # type: ignore[assignment]
     if isinstance(task_cfg, dict) and task_cfg.get("enabled", False):
-        try:
-            out_dim = imprint.infer_num_classes(dataset, override=task_cfg.get("num_classes", None))
-            include_task_loss = out_dim is not None and int(out_dim) > 0
-        except Exception:
-            include_task_loss = False
-    if include_task_loss:
-        head_name = str(task_cfg.get("head_name", "task_head"))
-        label_key = str(task_cfg.get("label_key", "y"))
-        task_w = float(task_cfg.get("weight", 1.0))
-        ce_loss = imprint.last_step_ce_loss(head_name=head_name, label_key=label_key)
-        def _combined_loss(graph: imprint.Graph, batch: Dict[str, "imprint.torch.Tensor"]) -> "imprint.torch.Tensor":  # type: ignore[name-defined]
-            # Combine graph-local objectives (rec, pred, etc.) with final-step CE for the task head.
-            return graph.loss() + task_w * ce_loss(graph, batch)
-        # Expose a logging component so the trainer can report CE alongside graph objective breakdowns.
-        try:
-            def _aux_in_norm(g: imprint.Graph, b: Dict[str, "imprint.torch.Tensor"]):  # type: ignore[name-defined]
-                m = g.modules.get("pc_aux")
-                if m is None or "in" not in m.state.input_drive:
-                    return imprint.torch.tensor(0.0)  # type: ignore[attr-defined]
-                x = m.state.input_drive["in"]
-                if x.dim() == 3:
-                    x = x[:, -1, :]
-                return x.abs().mean()
-            def _aux_out_std(g: imprint.Graph, b: Dict[str, "imprint.torch.Tensor"]):  # type: ignore[name-defined]
-                m = g.modules.get("pc_aux")
-                if m is None or "out" not in m.state.output:
-                    return imprint.torch.tensor(0.0)  # type: ignore[attr-defined]
-                y = m.state.output["out"]
-                if y.dim() == 3:
-                    y = y[:, -1, :]
-                return y.float().std()
-            def _head_logit_std(g: imprint.Graph, b: Dict[str, "imprint.torch.Tensor"]):  # type: ignore[name-defined]
-                h = g.modules.get(head_name)
-                if h is None or "out" not in h.state.output:
-                    return imprint.torch.tensor(0.0)  # type: ignore[attr-defined]
-                z = h.state.output["out"]
-                if z.dim() == 3:
-                    z = z[:, -1, :]
-                return z.float().std()
-            _combined_loss._components = {  # type: ignore[attr-defined]
-                f"{head_name}:ce": lambda g, b: task_w * ce_loss(g, b),
-                "aux_in_norm": _aux_in_norm,
-                "aux_out_std": _aux_out_std,
-                "head_logit_std": _head_logit_std,
-            }
-        except Exception:
-            pass
-        train_kwargs.update(
-            loss_fn=_combined_loss,  # type: ignore[assignment]
-            metric_fn=imprint.last_step_accuracy(head_name=head_name, label_key=label_key),
+        is_classification, _ = imprint.detect_task_mode(
+            dataset, num_classes_override=task_cfg.get("num_classes", None)
         )
+        if is_classification:
+            head_name = str(task_cfg.get("head_name", "task_head"))
+            label_key = str(task_cfg.get("label_key", "y"))
+            task_w = float(task_cfg.get("weight", 1.0))
+            train_kwargs["loss_fn"] = imprint.combined_graph_and_ce_loss(
+                head_name=head_name,
+                label_key=label_key,
+                weight=task_w,
+            )
+            train_kwargs["metric_fn"] = imprint.last_step_accuracy(
+                head_name=head_name,
+                label_key=label_key,
+            )
 
     imprint.train_graph(
         graph,
