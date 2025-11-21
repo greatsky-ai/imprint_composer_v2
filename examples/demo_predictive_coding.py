@@ -34,8 +34,8 @@ CONFIG: Dict[str, object] = {
     "train_split": "train",
     "val_split": "val",
     "two_layers": True,
-    "use_feedback": False,
-    "confine_pc_gradients": False,
+    "use_feedback": True,
+    "confine_pc_gradients": True,
     "loss": {
         "rec": 0,
         "pred": 1,
