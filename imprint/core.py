@@ -305,6 +305,9 @@ class Edge:
         self.proj: Optional[MaskedLinear] = None
         self._mask: Optional[torch.Tensor] = None
         self._max_abs: Optional[float] = None
+        # When True, gradients are not propagated into the source activations
+        # (but still flow into this edge's projection and downstream modules).
+        self.stop_grad: bool = False
 
     def constrain(
         self,
@@ -320,6 +323,9 @@ class Edge:
                 self.proj.set_mask(mask)
             if max_abs is not None:
                 self.proj.set_max_abs(max_abs)
+
+    def set_stop_grad(self, stop: bool = True) -> None:
+        self.stop_grad = bool(stop)
 
 
 class ModuleState:
@@ -570,7 +576,11 @@ class Module(nn.Module):
             new_state, layer_outputs = self.proto.step(primary, self.state.recurrent)  # type: ignore[attr-defined]
             self.state.recurrent = new_state
             self._last_layer_outputs = layer_outputs
-            self._pending_outputs = {"out": layer_outputs[-1]}
+            out_tensor = layer_outputs[-1]
+            expose = getattr(self.proto, "expose_output", None)
+            if callable(expose):
+                out_tensor = expose(out_tensor)
+            self._pending_outputs = {"out": out_tensor}
         else:
             payload = primary if primary is not None else drive.get("in")
             if payload is None:
@@ -868,6 +878,41 @@ class Graph:
             raise RuntimeError("No objectives registered across modules.")
         return total
 
+    def loss_breakdown(self) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], List[Dict[str, Any]]]:
+        """
+        Compute total loss along with per-term breakdown.
+
+        Returns:
+          - total: weighted sum of all objective terms
+          - by_label: mapping from label -> weighted contribution tensor
+              label preference order:
+                1) term name if provided when adding the objective
+                2) "<module>:<kind>" fallback (e.g., "pc0_decoder:mse")
+          - terms: list of detailed per-term dictionaries
+        """
+        if self._current_batch is None:
+            raise RuntimeError("Graph.loss_breakdown() called before bind().")
+
+        total: Optional[torch.Tensor] = None
+        by_label: Dict[str, torch.Tensor] = {}
+        terms: List[Dict[str, Any]] = []
+
+        for module in self.modules.values():
+            mod_total, mod_terms = module.objectives.compute_breakdown(self._current_batch, self.modules)
+            total = mod_total if total is None else (total + mod_total)
+            for entry in mod_terms:
+                label = entry.get("name") or f"{entry['module']}:{entry['kind']}"
+                contrib = entry["weighted_value"]
+                if label in by_label:
+                    by_label[label] = by_label[label] + contrib
+                else:
+                    by_label[label] = contrib
+            terms.extend(mod_terms)
+
+        if total is None:
+            raise RuntimeError("No objectives registered across modules.")
+        return total, by_label, terms
+
     def parameters(self) -> Iterable[torch.nn.Parameter]:
         for module in self.modules.values():
             yield from module.parameters()
@@ -960,10 +1005,10 @@ class Graph:
             out = module._output_dims.get("out")
             if isinstance(module, Source) and module._data is not None:
                 out = module._data.shape[-1]
+            elif hasattr(module.proto, "out_dim") and getattr(module.proto, "out_dim") is not None:
+                out = getattr(module.proto, "out_dim")
             elif hasattr(module.proto, "hidden"):
                 out = getattr(module.proto, "hidden")
-            elif hasattr(module.proto, "out_dim"):
-                out = getattr(module.proto, "out_dim")
             output_dims[(module.name, "out")] = None if out is Auto else out
             for custom_port in module._custom_output_nodes:
                 output_dims[(module.name, custom_port)] = None
@@ -1305,7 +1350,8 @@ class Graph:
     def _propagate_outputs(self, module: Module, edge_buffers: Dict[Edge, Optional[torch.Tensor]]) -> None:
         for port, tensor in module._pending_outputs.items():
             for edge in self._outgoing.get((module.name, port), []):
-                projected = edge.proj(tensor) if edge.proj is not None else tensor
+                payload = tensor.detach() if edge.stop_grad else tensor
+                projected = edge.proj(payload) if edge.proj is not None else payload
                 edge_buffers[edge] = projected
 
     def _propagate_drive_edges(
@@ -1316,5 +1362,6 @@ class Graph:
         edge_buffers: Dict[Edge, Optional[torch.Tensor]],
     ) -> None:
         for edge in self._drive_outgoing.get((module.name, port_name), []):
-            projected = edge.proj(tensor) if edge.proj is not None else tensor
+            payload = tensor.detach() if edge.stop_grad else tensor
+            projected = edge.proj(payload) if edge.proj is not None else payload
             edge_buffers[edge] = projected

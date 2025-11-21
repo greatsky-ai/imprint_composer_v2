@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Optional
 
 import torch
 
@@ -16,16 +16,18 @@ def prepare_seq2static_classification(
     head_name: str = "head",
     label_key: str = "y",
     emit_once: bool = False,
+    register_objective: bool = True,
 ) -> None:
     """
     Configure a graph for sequence-to-static classification:
       - Optionally set the head to emit once per sequence (off by default).
-      - Register CE objective on the head's 'out' port against batch[label_key].
+      - Optionally register CE objective on the head's 'out' port against batch[label_key].
     """
     head = graph.modules[head_name]
     if emit_once:
         head.schedule.emit_every = dataset.seq_len
-    head.objectives.ce(on="out", target=Targets.batch_key(label_key))
+    if register_objective:
+        head.objectives.ce(on="out", target=Targets.batch_key(label_key))
 
 
 def last_step_ce_loss(

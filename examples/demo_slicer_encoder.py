@@ -41,7 +41,7 @@ CONFIG = {
     "train_split": "train",
     "val_split": "val",
     "data": {
-        "path": "ball_drop.h5",
+        "path": "solids_32x32.h5",
         "batch_size": 128,
         "synth_total": 320,
         "synth_seq_len": 160,
@@ -142,7 +142,17 @@ def run() -> None:
         head_name="head",
         label_key="y",
         emit_once=False,
+        register_objective=False,  # avoid double-counting CE across all timesteps
     )
+
+    # Use last-step CE for training and expose it to the logger as a named component
+    ce_loss = imprint.last_step_ce_loss(head_name="head", label_key="y")
+    def _loss(graph: imprint.Graph, batch: dict):
+        return ce_loss(graph, batch)
+    try:
+        _loss._components = {"head:ce": ce_loss}  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
     imprint.train_graph(
         graph,
@@ -152,7 +162,7 @@ def run() -> None:
         log_every=cfg["log_every"],
         seed=cfg["seed"],
         grad_clip=cfg["grad_clip"],
-        loss_fn=imprint.last_step_ce_loss(head_name="head", label_key="y"),
+        loss_fn=_loss,
         metric_fn=imprint.last_step_accuracy(head_name="head", label_key="y"),
         val_dataset=val_dataset,
         val_every=cfg["val_every"],

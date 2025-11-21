@@ -24,6 +24,7 @@ class GRUStack(nn.Module):
         layernorm: bool = False,
         input_size: Optional[int] = None,
         reset_every: Optional[int] = None,
+        out_dim: Optional[int] = None,
     ) -> None:
         super().__init__()
         if layers < 1:
@@ -39,6 +40,11 @@ class GRUStack(nn.Module):
 
         self.cells = nn.ModuleList()
         self.norms = nn.ModuleList() if layernorm else None
+
+        # Optional output projection (exposed on module 'out' port only; recurrent state remains 'hidden')
+        self.out_dim: Optional[int] = int(out_dim) if out_dim is not None else None
+        self.out_proj: Optional[nn.Linear] = None
+        self.out_norm: Optional[nn.LayerNorm] = None
         if input_size is not None:
             self._build_cells(input_size)
 
@@ -50,6 +56,7 @@ class GRUStack(nn.Module):
             prev_dim = self.hidden
         if self.layernorm:
             self.norms = nn.ModuleList([nn.LayerNorm(self.hidden) for _ in range(self.layers)])
+        # Build output projection lazily later in bind()
 
     def bind(self, input_dim: int) -> None:
         if self.input_size is not None and self.input_size != input_dim:
@@ -57,6 +64,11 @@ class GRUStack(nn.Module):
         if self.input_size is None:
             self.input_size = input_dim
             self._build_cells(input_dim)
+        # Materialize output projection after input is known
+        if self.out_dim is not None and self.out_proj is None:
+            self.out_proj = nn.Linear(self.hidden, self.out_dim)
+            if self.layernorm:
+                self.out_norm = nn.LayerNorm(self.out_dim)
 
     def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> torch.Tensor:
         if self.input_size is None:
@@ -103,6 +115,16 @@ class GRUStack(nn.Module):
                 stacked = torch.zeros_like(stacked)
                 self._steps_since_reset = 0
         return stacked, layer_outputs
+
+    # Optional hook for Module to expose a transformed output port without
+    # altering layered hidden states.
+    def expose_output(self, last_hidden: torch.Tensor) -> torch.Tensor:
+        x = last_hidden
+        if self.out_proj is not None:
+            x = self.out_proj(x)
+            if self.out_norm is not None:
+                x = self.out_norm(x)
+        return x
 
 
 class MLP(nn.Module):

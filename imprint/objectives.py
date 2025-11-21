@@ -194,17 +194,18 @@ class Objectives:
         self.module = module
         self._terms: List[Dict[str, Any]] = []
 
-    def add(self, fn: Any, weight: float = 1.0) -> None:
-        self._terms.append({"kind": "callable", "fn": fn, "weight": float(weight)})
+    def add(self, fn: Any, weight: float = 1.0, name: Optional[str] = None) -> None:
+        self._terms.append({"kind": "callable", "fn": fn, "weight": float(weight), "name": name})
 
     def mse(
         self,
         on: str,
         target: TargetsSpec,
         weight: float = 1.0,
+        name: Optional[str] = None,
     ) -> None:
         self._terms.append(
-            {"kind": "mse", "on": on, "target": target, "weight": float(weight)}
+            {"kind": "mse", "on": on, "target": target, "weight": float(weight), "name": name}
         )
 
     def ce(
@@ -212,31 +213,32 @@ class Objectives:
         on: str,
         target: TargetsSpec,
         weight: float = 1.0,
+        name: Optional[str] = None,
     ) -> None:
         self._terms.append(
-            {"kind": "ce", "on": on, "target": target, "weight": float(weight)}
+            {"kind": "ce", "on": on, "target": target, "weight": float(weight), "name": name}
         )
 
-    def activity_l1(self, on: str, weight: float = 1.0) -> None:
-        self._terms.append({"kind": "activity_l1", "on": on, "weight": float(weight)})
+    def activity_l1(self, on: str, weight: float = 1.0, name: Optional[str] = None) -> None:
+        self._terms.append({"kind": "activity_l1", "on": on, "weight": float(weight), "name": name})
 
-    def activity_l2(self, on: str, weight: float = 1.0) -> None:
-        self._terms.append({"kind": "activity_l2", "on": on, "weight": float(weight)})
+    def activity_l2(self, on: str, weight: float = 1.0, name: Optional[str] = None) -> None:
+        self._terms.append({"kind": "activity_l2", "on": on, "weight": float(weight), "name": name})
 
     # --- Parameter regularization (tag-based) ---
-    def params_l2(self, tag: str, weight: float = 1.0) -> None:
+    def params_l2(self, tag: str, weight: float = 1.0, name: Optional[str] = None) -> None:
         """
         L2 regularization over parameters selected by a semantic tag.
         Supported tags: 'proto_params', 'recurrent_params', 'all_params'
         """
-        self._terms.append({"kind": "params_l2", "tag": tag, "weight": float(weight)})
+        self._terms.append({"kind": "params_l2", "tag": tag, "weight": float(weight), "name": name})
 
-    def params_l1(self, tag: str, weight: float = 1.0) -> None:
+    def params_l1(self, tag: str, weight: float = 1.0, name: Optional[str] = None) -> None:
         """
         L1 regularization over parameters selected by a semantic tag.
         Supported tags: 'proto_params', 'recurrent_params', 'all_params'
         """
-        self._terms.append({"kind": "params_l1", "tag": tag, "weight": float(weight)})
+        self._terms.append({"kind": "params_l1", "tag": tag, "weight": float(weight), "name": name})
 
     def _port_tensor(self, port: str) -> torch.Tensor:
         if port not in self.module.state.output:
@@ -283,3 +285,70 @@ class Objectives:
             raise ValueError(f"Unsupported objective kind: {kind}")
 
         return torch.stack(losses).sum()
+
+    def compute_breakdown(
+        self,
+        batch: Dict[str, torch.Tensor],
+        modules: Dict[str, Module],
+    ) -> Tuple[torch.Tensor, List[Dict[str, Any]]]:
+        """
+        Compute weighted total and per-term contributions for this module.
+        Returns (total, breakdown_list) where each entry includes keys:
+          - module, kind, name, on/tag, weight, value, weighted_value
+        """
+        if not self._terms:
+            zero = _zero_scalar(self.module)
+            return zero, []
+
+        total: Optional[torch.Tensor] = None
+        breakdown: List[Dict[str, Any]] = []
+
+        for term in self._terms:
+            kind = term["kind"]
+            weight = float(term.get("weight", 1.0))
+            name = term.get("name")
+
+            raw: Optional[torch.Tensor] = None
+
+            if kind == "callable":
+                raw = term["fn"]()
+            elif kind in {"activity_l1", "activity_l2"}:
+                tensor = self._port_tensor(term["on"])
+                raw = _activity_penalty(tensor, kind)
+            elif kind in {"mse", "ce"}:
+                pred = self._port_tensor(term["on"])
+                target = resolve_target(
+                    term["target"],
+                    batch,
+                    modules,
+                    align_with=pred,
+                    dtype=torch.float32 if kind == "mse" else None,
+                )
+                raw = F.mse_loss(pred, target) if kind == "mse" else _cross_entropy_loss(pred, target)
+            elif kind in {"params_l1", "params_l2"}:
+                raw = _parameter_penalty(self.module, term["tag"], kind)
+            else:
+                raise ValueError(f"Unsupported objective kind: {kind}")
+
+            assert raw is not None
+            weighted = raw * weight
+            total = weighted if total is None else total + weighted
+
+            entry: Dict[str, Any] = {
+                "module": self.module.name,
+                "kind": kind,
+                "name": name,
+                "weight": weight,
+                "value": raw,
+                "weighted_value": weighted,
+            }
+            if "on" in term:
+                entry["on"] = term["on"]
+            if "tag" in term:
+                entry["tag"] = term["tag"]
+            if "target" in term:
+                entry["target"] = term["target"]
+            breakdown.append(entry)
+
+        assert total is not None
+        return total, breakdown

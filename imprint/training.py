@@ -75,12 +75,35 @@ class Trainer:
         total_metric = 0.0
         steps = 0
         last_loss_value = 0.0
+        last_by_label: Optional[Dict[str, float]] = None
 
         for step, batch in enumerate(self.dataset.iter_batches(shuffle=True), start=1):
             self.graph.rollout(batch)
             optimizer = self._ensure_optimizer()
             optimizer.zero_grad()
-            loss = self._compute_loss(batch)
+
+            # When using default objectives, use graph loss and collect breakdown.
+            # Otherwise, compute custom loss but still collect breakdown for logging only.
+            if self.loss_fn is None:
+                loss_tensor, by_label_tensor, _ = self.graph.loss_breakdown()
+                loss = loss_tensor
+                last_by_label = {k: float(v.item()) for k, v in by_label_tensor.items()}
+            else:
+                loss = self._compute_loss(batch)
+                with torch.no_grad():
+                    _, by_label_tensor, _ = self.graph.loss_breakdown()
+                    last_by_label = {k: float(v.item()) for k, v in by_label_tensor.items()}
+                    # Optional: include custom loss components exposed by the loss_fn
+                    components = getattr(self.loss_fn, "components", None) or getattr(self.loss_fn, "_components", None)
+                    if isinstance(components, dict):
+                        for name, fn in components.items():
+                            try:
+                                contrib = fn(self.graph, batch)
+                                last_by_label[name] = float(contrib.item())
+                            except Exception:
+                                # Component logging is best-effort; ignore errors
+                                continue
+
             loss.backward()
             if self.config.grad_clip is not None:
                 torch.nn.utils.clip_grad_norm_(self.graph.parameters(), self.config.grad_clip)
@@ -95,10 +118,20 @@ class Trainer:
                 total_metric += metric_value
 
             if step % self.config.log_every == 0 or step == self.dataset.batches_per_epoch:
-                print(
-                    f"[epoch {epoch}] step {step}/{self.dataset.batches_per_epoch} "
-                    f"loss={last_loss_value:.4f}"
-                )
+                if last_by_label:
+                    # Sort descending by contribution for readability
+                    parts = " ".join(
+                        f"{k}={v:.4f}" for k, v in sorted(last_by_label.items(), key=lambda kv: -kv[1])
+                    )
+                    print(
+                        f"[epoch {epoch}] step {step}/{self.dataset.batches_per_epoch} "
+                        f"loss={last_loss_value:.4f} {parts}"
+                    )
+                else:
+                    print(
+                        f"[epoch {epoch}] step {step}/{self.dataset.batches_per_epoch} "
+                        f"loss={last_loss_value:.4f}"
+                    )
 
         avg_metric = (total_metric / steps) if (self.metric_fn is not None and steps > 0) else None
         avg_loss = total_loss / self.dataset.batches_per_epoch

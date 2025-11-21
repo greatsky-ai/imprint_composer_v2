@@ -23,6 +23,8 @@ Imprint is a minimal, shapes‑driven toolkit for building and training modular 
 - Projections with constraints
   - Edges are backed by `MaskedLinear` and support persistent masks and per‑edge max‑abs clamps.
   - Modules can also apply input masks/limits per port.
+- Gradient flow control
+  - Edge‑level stop‑gradient lets you block gradients from flowing back into a source module while still training the edge projection and downstream modules (ideal for auxiliary heads that should not steer backbone encoders).
 - Prototypes (protos)
   - `GRUStack` with `bind(input_dim)` and single‑step `step(drive, state)`; optional layernorm.
   - `MLP` with Auto final width (derived from objectives or outputs).
@@ -121,6 +123,30 @@ imprint.train_graph(
   - Increase `Rate.inner_steps` on an encoder to perform multiple internal updates per external tick.
 - Grouped inputs and aggregation
   - Use `InPortGroup` and `protos.Aggregator` to combine multiple streams via `concat` or `sum`.
+
+## Gradient flow control (stop‑grad on edges)
+
+Imprint allows isolating gradient flow at the edge level. This is critical when attaching auxiliary/task heads to a backbone: you often want the aux head and its projections to learn from the task loss without steering the upstream feature extractors that are trained under different objectives.
+
+- What it does: Setting stop‑grad on an edge detaches the source activation before projection. Gradients still flow
+  - into the edge’s projection weights, and
+  - into all downstream modules (e.g., aux GRUs, MLP heads),
+  but do not flow back into the source module that produced the activation.
+- Why it matters: Prevents task objectives from inadvertently updating backbone modules (e.g., predictive‑coding layers trained via reconstruction/prediction) and reduces gradient interference in multi‑objective setups.
+
+Usage:
+
+```python
+# Prevent task loss from updating the upstream encoder while still training the
+# edge projection and downstream auxiliary module / head.
+edge = graph.connect(encoder["out"], aux["in"])
+edge.set_stop_grad(True)
+```
+
+Notes:
+- Works for both standard output edges and input‑drive edges; the detach is applied before any projection.
+- Source modules remain trainable by their own objectives; only the task loss routed through the stop‑grad edge is blocked from flowing upstream.
+- See `examples/demo_predictive_coding.py`: the aux GRU consumes PC GRU latents via stop‑grad edges so the task head trains the aux path while PC layers train on their reconstruction/predictor losses.
 
 
 ## Objectives: targets and regularization
