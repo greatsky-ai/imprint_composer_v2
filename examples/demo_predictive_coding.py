@@ -35,6 +35,7 @@ CONFIG: Dict[str, object] = {
     "val_split": "val",
     "two_layers": True,
     "use_feedback": False,
+    "confine_pc_gradients": False,
     "loss": {
         "rec": 0,
         "pred": 1,
@@ -138,7 +139,9 @@ def _add_pc_layer(
     graph.add(decoder, err, gru)
 
     graph.connect(gru["out"], decoder["in"])
-    graph.connect(signal_src, err["in.x"])
+    edge = graph.connect(signal_src, err["in.x"])
+    if bool(CONFIG.get("confine_pc_gradients", False)):
+        edge.set_stop_grad(True)
     graph.connect(decoder["out"], err["in.pred"])
     graph.connect(err["out"], gru["in"])
 
@@ -151,8 +154,11 @@ def _connect_top_down(
     lower: Dict[str, imprint.Module],
 ) -> None:
     ctx = higher["gru"]["out"]
-    graph.connect(ctx, lower["gru"]["in"])
-    graph.connect(ctx, lower["decoder"]["in"])
+    edge_gru = graph.connect(ctx, lower["gru"]["in"])
+    edge_dec = graph.connect(ctx, lower["decoder"]["in"])
+    if bool(CONFIG.get("confine_pc_gradients", False)):
+        edge_gru.set_stop_grad(True)
+        edge_dec.set_stop_grad(True)
 
 
 def _add_predictor_head(
