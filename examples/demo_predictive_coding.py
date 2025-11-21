@@ -32,8 +32,8 @@ CONFIG: Dict[str, object] = {
     "train_split": "train",
     "val_split": "val",
     "loss": {
-        "rec": 1.0,
-        "pred": 0,
+        "rec": 0.3,
+        "pred": 1.0,
         "sparse_err": 0,
     },
     "layers": [
@@ -41,22 +41,23 @@ CONFIG: Dict[str, object] = {
             "name": "pc0",
             "hidden": 128,
             "layers": 1,
-            "decoder_widths": [64, Auto],
-            "out_dim": 32,
+            "decoder_widths": [128, Auto],
+            "out_dim": 16,
+
         },
         {
             "name": "pc1",
             "hidden": 128,
             "layers": 1,
-            "decoder_widths": [64, Auto],
-            "out_dim": 32,
+            "decoder_widths": [128, Auto],
+            "out_dim": 16,
         },
     ],
     "predictor_widths": [256, Auto],
     # Task head configuration (aux GRU consumes all PC GRU latents)
     "task": {
         "enabled": True,
-        "aux_hidden": 64,
+        "aux_hidden": 128,
         "aux_layers": 1,
         "head_widths": [Auto],
         # If labels are present, we use classification; otherwise we fall back to next-step MSE.
