@@ -30,7 +30,7 @@ CONFIG: Dict[str, object] = {
     "val_every": 1,
     "grad_clip": 1.0,
     "use_adamw": True,
-    "weight_decay": 5e-2,
+    "weight_decay": 1e-2,
     "train_split": "train",
     "val_split": "val",
     "two_layers": True,
@@ -38,8 +38,8 @@ CONFIG: Dict[str, object] = {
     "confine_pc_gradients": True,
     "log_gradients": False,
     "loss": {
-        "rec": 0,
-        "pred": 1,
+        "rec": 1,
+        "pred": 0,
         "sparse_err": 0.0,
     },
     "layers": [
