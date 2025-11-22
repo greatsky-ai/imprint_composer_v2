@@ -151,7 +151,7 @@ Notes:
 
 ### FiLM feedback modulation
 
-`examples/demo_predictive_coding.py` now routes top-down GRU context through a per-layer `pc*_film` module before the lower GRU consumes its reconstruction error. The conditioner lives on the receiving layer, is sized via `CONFIG["film_widths"]` (or per-layer `spec["film_widths"]`), and emits FiLM `(gamma, beta)` parameters that gate the error drive (`signal * (1 + gamma) + beta`). The conditioning edge is tagged with `set_stop_grad(True)` so higher layers provide context without receiving gradients from the lower layer’s objectives, keeping the FiLM parameters and projections trained purely by the receiving layer’s signals. When feedback is disabled (single layer or `use_feedback=False`), the graph automatically bypasses the FiLM block and feeds the error directly into the GRU.
+`examples/demo_predictive_coding.py` now routes top-down GRU context through a per-layer `pc*_film` module before the lower GRU consumes its reconstruction error. The conditioner lives on the receiving layer, is sized via `CONFIG["film_widths"]` (or per-layer `spec["film_widths"]`), and emits FiLM `(gamma, beta)` parameters that gate the error drive (`signal * (2 * sigmoid(gamma)) + beta`). The conditioning edge is tagged with `set_stop_grad(True)` so higher layers provide context without receiving gradients from the lower layer’s objectives, keeping the FiLM parameters and projections trained purely by the receiving layer’s signals. When feedback is disabled (single layer or `use_feedback=False`), the graph automatically bypasses the FiLM block and feeds the error directly into the GRU.
 
 ## Gradient diagnostics
 
@@ -210,7 +210,7 @@ Use the summaries to quickly confirm that:
 - `Elementwise(op)` supports basic ops (e.g., `sub→abs`, `add`, `mul`).
 - `FiLMConditioner(widths=[..., Auto], act="relu")`
   - Expects grouped `signal` and `cond` inputs; the final width must resolve to `2 * signal_dim` to emit `(gamma, beta)`.
-  - Applies `signal * (1 + gamma) + beta`, making it easy to slot FiLM gating between predictive layers while keeping the conditioner local to the receiving module (use stop-grad on the conditioning edge to block upstream gradients).
+  - Applies `signal * (2 * sigmoid(gamma)) + beta`, making it easy to slot FiLM gating between predictive layers while keeping the conditioner local to the receiving module (use stop-grad on the conditioning edge to block upstream gradients).
 
 
 ## Training helper

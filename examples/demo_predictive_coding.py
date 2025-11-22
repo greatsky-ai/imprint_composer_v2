@@ -25,22 +25,22 @@ Auto = imprint.Auto
 CONFIG: Dict[str, object] = {
     "seed": 5,
     "epochs": 5,
-    "lr": 0.5e-3,
+    "lr": 2e-3,
     "log_every": 5,
     "val_every": 1,
-    "grad_clip": 1.0,
+    #"grad_clip": 1.0,
     "use_adamw": True,
-    "weight_decay": 5e-2,
+    "weight_decay": 2e-2,
     "train_split": "train",
     "val_split": "val",
     "two_layers": True,
     "use_feedback": True,
     "confine_pc_gradients": True,
-    "log_gradients": True,
+    "log_gradients": False,
     "loss": {
         "rec": 0.5,
         "pred": 0.5,
-        "sparse_err": 0.01,
+        "sparse_err": 0,
     },
     "layers": [
         {
@@ -60,7 +60,7 @@ CONFIG: Dict[str, object] = {
         },
     ],
     "predictor_widths": [256, Auto],
-    "film_widths": [64, Auto],
+    "film_widths": [128, Auto],
     # Task head configuration (aux GRU consumes all PC GRU latents)
     "task": {
         "enabled": True,

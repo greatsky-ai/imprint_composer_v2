@@ -319,8 +319,9 @@ class FiLMConditioner(nn.Module):
             x = layer(x)
             if idx < len(self.layers) - 1:
                 x = self._activation(x)
-        gamma, beta = torch.split(x, self.signal_dim, dim=-1)
-        return signal * (gamma + 1.0) + beta
+        gamma_raw, beta = torch.split(x, self.signal_dim, dim=-1)
+        scale = torch.sigmoid(gamma_raw) * 2.0  # confine scale to (0, 2) while centering at 1
+        return signal * scale + beta
 
     def infer_output_dim(self, input_dims: Dict[str, int]) -> Optional[int]:
         signal_dim = input_dims.get("signal")
