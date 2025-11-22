@@ -37,9 +37,10 @@ CONFIG: Dict[str, object] = {
     "use_feedback": True,
     "confine_pc_gradients": True,
     "log_gradients": False,
+    "visualize_val_sample": True,
     "loss": {
         "rec": 0.5,
-        "pred": 0.5,
+        "pred": 0,
         "sparse_err": 0,
     },
     "layers": [
@@ -48,7 +49,7 @@ CONFIG: Dict[str, object] = {
             "hidden": 128,
             "layers": 1,
             "decoder_widths": [128, Auto],
-            "out_dim": 32,
+            "out_dim": 8,
 
         },
         {
@@ -56,11 +57,11 @@ CONFIG: Dict[str, object] = {
             "hidden": 128,
             "layers": 1,
             "decoder_widths": [128, Auto],
-            "out_dim": 32,
+            "out_dim": 8,
         },
     ],
     "predictor_widths": [256, Auto],
-    "film_widths": [128, Auto],
+    "film_widths": [Auto],
     # Task head configuration (aux GRU consumes all PC GRU latents)
     "task": {
         "enabled": True,
@@ -375,6 +376,22 @@ def run() -> None:
         grad_monitor=grad_monitor,
         **train_kwargs,  # type: ignore[arg-type]
     )
+
+    if bool(cfg.get("visualize_val_sample", False)):
+        if val_dataset is None:
+            print("visualize_val_sample=True but validation split is disabled.")
+        else:
+            module_name = str(cfg.get("visualize_val_module", "pc0_decoder"))
+            port_name = str(cfg.get("visualize_val_port", "out"))
+            mode = str(cfg.get("visualize_val_mode", "frame"))
+            imprint.visualize_module_output(
+                graph,
+                val_dataset,
+                module_name=module_name,
+                port=port_name,
+                mode=mode,
+                title=f"{module_name}.{port_name} ({mode})",
+            )
 
     print("Done.")
     if grad_monitor is not None:

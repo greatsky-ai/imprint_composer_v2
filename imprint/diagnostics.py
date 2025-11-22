@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -7,6 +8,7 @@ import torch
 from torch.utils.hooks import RemovableHandle
 
 from .core import Edge, Graph, Module
+from .data_helper import SequenceDataset
 
 
 @dataclass
@@ -285,4 +287,142 @@ def plot_gradient_heatmap(
     ax.set_title(f"{section.capitalize()} gradient {metric}")
     plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     return ax
+
+
+@torch.inference_mode()
+def visualize_module_output(
+    graph: Graph,
+    dataset: SequenceDataset,
+    module_name: str,
+    *,
+    port: str = "out",
+    mode: str = "trace",
+    sample_index: Optional[int] = None,
+    time_index: Optional[int] = None,
+    max_traces: int = 16,
+    collapse_to_square: bool = True,
+    ax: Optional["matplotlib.axes.Axes"] = None,
+    show: bool = True,
+    title: Optional[str] = None,
+) -> "matplotlib.axes.Axes":
+    """
+    Visualize a module's output on a random validation sample.
+
+    Args:
+        graph: Bound graph whose modules will be evaluated.
+        dataset: SequenceDataset providing validation sequences.
+        module_name: Name of the module to visualize.
+        port: Output port to sample (default: 'out').
+        mode: 'trace' to plot feature traces over time, 'frame' to render a single
+            timestep as an image after reshaping to a square grid.
+        sample_index: Optional explicit sequence index; defaults to a random pick.
+        time_index: Optional explicit timestep; defaults to a random tick.
+        max_traces: Max number of feature traces to overlay (trace mode only).
+        collapse_to_square: Pad/reshape feature vectors into the smallest square
+            when rendering frames.
+        ax: Optional matplotlib axes to draw on.
+        show: Whether to call plt.show() after drawing.
+        title: Optional custom plot title.
+    Returns:
+        The matplotlib Axes containing the visualization.
+    """
+    try:
+        import matplotlib.pyplot as plt  # type: ignore
+        import numpy as np
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise RuntimeError("matplotlib is required for visualization helpers.") from exc
+
+    if dataset.num_sequences == 0:
+        raise ValueError("Dataset is empty; cannot draw samples.")
+    if module_name not in graph.modules:
+        raise KeyError(f"Graph has no module named {module_name!r}.")
+    module = graph.modules[module_name]
+
+    sample_idx = sample_index
+    if sample_idx is None:
+        sample_idx = int(torch.randint(dataset.num_sequences, (1,), device=dataset.data.device).item())
+    sample_idx = int(sample_idx) % dataset.num_sequences
+
+    batch = {"x": dataset.data[sample_idx : sample_idx + 1]}
+    if dataset.labels is not None:
+        batch["y"] = dataset.labels[sample_idx : sample_idx + 1]
+
+    primary_device: Optional[torch.device] = None
+    for param in graph.parameters():
+        primary_device = param.device
+        break
+    if primary_device is not None:
+        batch = {key: tensor.to(primary_device) for key, tensor in batch.items()}
+
+    graph.rollout(batch)
+
+    if port not in module.state.output:
+        raise KeyError(f"Module {module_name!r} has no recorded port {port!r}.")
+    tensor = module.state.output[port]
+    if tensor.dim() == 2:
+        tensor = tensor.unsqueeze(1)
+    if tensor.dim() != 3:
+        raise ValueError(
+            f"Expected module output with shape [B, T, D]; got {tuple(tensor.shape)}."
+        )
+    seq = tensor[0].detach().cpu()
+    ticks, feat_dim = seq.shape
+    if ticks == 0:
+        raise RuntimeError(f"Module {module_name}.{port} emitted zero timesteps.")
+
+    tick_idx = time_index
+    if tick_idx is None:
+        tick_idx = int(torch.randint(ticks, (1,)).item())
+    tick_idx = max(0, min(int(tick_idx), ticks - 1))
+
+    if mode not in ("trace", "frame"):
+        raise ValueError("mode must be 'trace' or 'frame'.")
+
+    if ax is None:
+        _, ax = plt.subplots(
+            figsize=(10, 4) if mode == "trace" else (4, 4)
+        )
+
+    resolved_title = title or f"{module_name}.{port} ({mode})"
+
+    if mode == "trace":
+        max_traces = max(1, min(int(max_traces), feat_dim))
+        if max_traces == feat_dim:
+            selected = torch.arange(feat_dim)
+        else:
+            selected = torch.linspace(0, feat_dim - 1, steps=max_traces).long()
+        data = seq[:, selected].numpy()
+        time_axis = np.arange(ticks)
+        ax.plot(time_axis, data, alpha=0.8)
+        ax.axvline(tick_idx, color="k", linestyle="--", linewidth=1.0, alpha=0.6)
+        ax.set_xlabel("tick")
+        ax.set_ylabel("activation")
+        ax.set_title(resolved_title + f" | sample={sample_idx}")
+    else:
+        vector = seq[tick_idx]
+        frame = _vector_to_square(vector, collapse_to_square).numpy()
+        im = ax.imshow(frame, cmap="magma", interpolation="nearest")
+        ax.set_title(resolved_title + f" | sample={sample_idx} tick={tick_idx}")
+        ax.axis("off")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    if show:
+        plt.tight_layout()
+        plt.show(block=False)
+    return ax
+
+
+def _vector_to_square(vector: torch.Tensor, collapse: bool) -> torch.Tensor:
+    length = vector.numel()
+    side = math.isqrt(length)
+    if side * side != length:
+        if not collapse:
+            raise ValueError(
+                f"Feature dim {length} is not a perfect square; set collapse_to_square=True."
+            )
+        side = int(math.ceil(math.sqrt(length)))
+        padded = torch.zeros(side * side, dtype=vector.dtype)
+        padded[:length] = vector
+        vector = padded
+    return vector.view(side, side)
 

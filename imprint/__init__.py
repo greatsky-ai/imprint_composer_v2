@@ -30,7 +30,12 @@ from .recipes import (
     combined_graph_and_ce_loss,
     attach_task_head,
 )
-from .diagnostics import GradientWatcher, GradientSummary, plot_gradient_heatmap
+from .diagnostics import (
+    GradientWatcher,
+    GradientSummary,
+    plot_gradient_heatmap,
+    visualize_module_output,
+)
 from . import masks
 from . import protos
 
@@ -66,6 +71,7 @@ __all__ = [
     "GradientWatcher",
     "GradientSummary",
     "plot_gradient_heatmap",
+    "visualize_module_output",
     "masks",
     "protos",
 ]
