@@ -25,7 +25,7 @@ Auto = imprint.Auto
 CONFIG: Dict[str, object] = {
     "seed": 5,
     "epochs": 5,
-    "lr": 2e-3,
+    "lr": 1e-3,
     "log_every": 1,
     "val_every": 1,
     #"grad_clip": 1.0,
@@ -38,7 +38,7 @@ CONFIG: Dict[str, object] = {
     "confine_pc_gradients": True,
     "log_gradients": False,
     "visualize_val_sample": True,
-    "input_scale": 200.0,
+    "input_scale": 60.0,
     "loss": {
         "rec": 0.5,
         "pred": 0,
