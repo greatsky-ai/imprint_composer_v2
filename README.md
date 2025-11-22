@@ -30,6 +30,7 @@ Imprint is a minimal, shapes‑driven toolkit for building and training modular 
   - `MLP` with Auto final width (derived from objectives or outputs).
   - `Aggregator` for grouped inputs (`concat` or `sum` then `Linear`).
   - `Elementwise` for simple tensor ops (e.g., `sub→abs`).
+  - `FiLMConditioner` for FiLM-style modulation driven by top-down context.
 - Objectives and targets
   - Losses: `mse`, `ce`, `activity_l1`, `activity_l2`, plus user‑supplied callables.
   - Targets: `Targets.batch_key("y")`, `Targets.shifted_input(src, shift)`, `Targets.port_drive(module, "in")`.
@@ -148,6 +149,10 @@ Notes:
 - Source modules remain trainable by their own objectives; only the task loss routed through the stop‑grad edge is blocked from flowing upstream.
 - See `examples/demo_predictive_coding.py`: the aux GRU consumes PC GRU latents via stop‑grad edges so the task head trains the aux path while PC layers train on their reconstruction/predictor losses.
 
+### FiLM feedback modulation
+
+`examples/demo_predictive_coding.py` now routes top-down GRU context through a per-layer `pc*_film` module before the lower GRU consumes its reconstruction error. The conditioner lives on the receiving layer, is sized via `CONFIG["film_widths"]` (or per-layer `spec["film_widths"]`), and emits FiLM `(gamma, beta)` parameters that gate the error drive (`signal * (1 + gamma) + beta`). The conditioning edge is tagged with `set_stop_grad(True)` so higher layers provide context without receiving gradients from the lower layer’s objectives, keeping the FiLM parameters and projections trained purely by the receiving layer’s signals. When feedback is disabled (single layer or `use_feedback=False`), the graph automatically bypasses the FiLM block and feeds the error directly into the GRU.
+
 ## Gradient diagnostics
 
 Understanding whether gradients are flowing (or being blocked) is often more informative than raw losses. The `imprint.diagnostics` helpers provide a lightweight way to inspect per-module, per-edge, and per-port gradients every few logging steps.
@@ -203,6 +208,9 @@ Use the summaries to quickly confirm that:
 - `Aggregator(mode="concat→linear", out_dim)`
   - `bind(input_dims: Dict[str, int])` sizes internal linear layer post‑concat/sum.
 - `Elementwise(op)` supports basic ops (e.g., `sub→abs`, `add`, `mul`).
+- `FiLMConditioner(widths=[..., Auto], act="relu")`
+  - Expects grouped `signal` and `cond` inputs; the final width must resolve to `2 * signal_dim` to emit `(gamma, beta)`.
+  - Applies `signal * (1 + gamma) + beta`, making it easy to slot FiLM gating between predictive layers while keeping the conditioner local to the receiving module (use stop-grad on the conditioning edge to block upstream gradients).
 
 
 ## Training helper

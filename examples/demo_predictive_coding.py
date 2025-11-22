@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Dict, List 
+from typing import Dict, List, Sequence
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -36,11 +36,11 @@ CONFIG: Dict[str, object] = {
     "two_layers": True,
     "use_feedback": True,
     "confine_pc_gradients": True,
-    "log_gradients": False,
+    "log_gradients": True,
     "loss": {
-        "rec": 0,
-        "pred": 1,
-        "sparse_err": 0.0,
+        "rec": 0.5,
+        "pred": 0.5,
+        "sparse_err": 0.01,
     },
     "layers": [
         {
@@ -60,6 +60,7 @@ CONFIG: Dict[str, object] = {
         },
     ],
     "predictor_widths": [256, Auto],
+    "film_widths": [64, Auto],
     # Task head configuration (aux GRU consumes all PC GRU latents)
     "task": {
         "enabled": True,
@@ -75,7 +76,7 @@ CONFIG: Dict[str, object] = {
         "stop_grad": True,    # detach gradients from PC GRU outputs into aux (prevents upstream updates)
     },
     "data": {
-        "path": "solids_32x32.h5",
+        "path": "solids_6class_32x32.h5",
         "batch_size": 96,
         "synth_total": 320,
         "synth_seq_len": 160,
@@ -90,6 +91,8 @@ def _add_pc_layer(
     spec: Dict[str, object],
     *,
     signal_src: imprint.PortRef,
+    apply_film: bool,
+    film_widths: Sequence[int] | None,
 ) -> Dict[str, imprint.Module]:
     """
     Assemble a single predictive-coding layer consisting of:
@@ -144,9 +147,35 @@ def _add_pc_layer(
     if bool(CONFIG.get("confine_pc_gradients", False)):
         edge.set_stop_grad(True)
     graph.connect(decoder["out"], err["in.pred"])
-    graph.connect(err["out"], gru["in"])
 
-    return {"decoder": decoder, "err": err, "gru": gru}
+    film = None
+    drive_src = err["out"]
+    if apply_film:
+        resolved_widths = spec.get("film_widths", film_widths)
+        if resolved_widths is None:
+            raise ValueError("FiLM widths must be provided when apply_film is enabled.")
+        film = imprint.Module(
+            name=f"{base}_film",
+            proto=imprint.protos.FiLMConditioner(widths=list(resolved_widths)),
+            ports=imprint.Ports(
+                in_=imprint.InPortGroup(
+                    layout="disjoint",
+                    signal=imprint.InPort(size=Auto),
+                    cond=imprint.InPort(size=Auto),
+                ),
+                out_default=Auto,
+            ),
+        )
+        graph.add(film)
+        graph.connect(err["out"], film["in.signal"])
+        drive_src = film["out"]
+
+    graph.connect(drive_src, gru["in"])
+
+    modules: Dict[str, imprint.Module] = {"decoder": decoder, "err": err, "gru": gru}
+    if film is not None:
+        modules["film"] = film
+    return modules
 
 
 def _connect_top_down(
@@ -155,11 +184,16 @@ def _connect_top_down(
     lower: Dict[str, imprint.Module],
 ) -> None:
     ctx = higher["gru"]["out"]
-    edge_gru = graph.connect(ctx, lower["gru"]["in"])
     edge_dec = graph.connect(ctx, lower["decoder"]["in"])
+    film = lower.get("film")
+    edge_target = None
+    if film is not None:
+        edge_target = graph.connect(ctx, film["in.cond"])
+    else:
+        edge_target = graph.connect(ctx, lower["gru"]["in"])
     if bool(CONFIG.get("confine_pc_gradients", False)):
-        edge_gru.set_stop_grad(True)
         edge_dec.set_stop_grad(True)
+        edge_target.set_stop_grad(True)
 
 
 def _add_predictor_head(
@@ -238,11 +272,29 @@ def build_graph(dataset: SequenceDataset) -> imprint.Graph:
     if not bool(CONFIG.get("two_layers", True)):
         layer_specs = layer_specs[:1]
 
+    default_film_widths = CONFIG.get("film_widths", None)
+    use_feedback = bool(CONFIG.get("use_feedback", True))
+
     for idx, layer_spec in enumerate(layer_specs):
-        layer = _add_pc_layer(graph, layer_spec, signal_src=signal)  # type: ignore[arg-type]
+        apply_film = use_feedback and idx < len(layer_specs) - 1
+        film_spec = layer_spec.get("film_widths")
+        film_widths: Sequence[int] | None = None
+        if isinstance(film_spec, Sequence) and not isinstance(film_spec, (str, bytes)):
+            film_widths = film_spec  # type: ignore[assignment]
+        elif isinstance(default_film_widths, Sequence) and not isinstance(
+            default_film_widths, (str, bytes)
+        ):
+            film_widths = default_film_widths  # type: ignore[assignment]
+        layer = _add_pc_layer(
+            graph,
+            layer_spec,  # type: ignore[arg-type]
+            signal_src=signal,
+            apply_film=apply_film,
+            film_widths=film_widths,  # type: ignore[arg-type]
+        )
         built_layers.append(layer)
         signal = layer["err"]["out"]
-        if idx > 0 and bool(CONFIG.get("use_feedback", True)):
+        if idx > 0 and use_feedback:
             _connect_top_down(graph, built_layers[idx], built_layers[idx - 1])
 
     predictor = None

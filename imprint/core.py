@@ -1259,6 +1259,15 @@ class Graph:
                         for sub_name in group.subports
                     }
                     module.proto.bind(dims)
+                elif isinstance(module.proto, protos.FiLMConditioner):
+                    group = module._input_groups.get("in")
+                    if group is None:
+                        raise ValueError(f"FiLM module {module.name} requires an InPortGroup named 'in'.")
+                    dims = {
+                        sub_name: self._port_dims[(module.name, f"in.{sub_name}")]
+                        for sub_name in group.subports
+                    }
+                    module.proto.bind(dims)
                 elif isinstance(module.proto, protos.MLP):
                     if in_dim is None or out_dim is None:
                         raise ValueError(f"Module {module.name} requires resolved in/out dims.")

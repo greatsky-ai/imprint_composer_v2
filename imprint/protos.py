@@ -247,6 +247,91 @@ class Aggregator(nn.Module):
         return self.linear(combined)
 
 
+class FiLMConditioner(nn.Module):
+    """
+    Prototype: FiLM modulation driven by a conditioning signal.
+    """
+
+    def __init__(self, widths: List[int], act: str = "relu") -> None:
+        super().__init__()
+        if not widths:
+            raise ValueError("widths must contain at least one layer size.")
+        self.widths = list(widths)
+        self.act = act
+        self.mode = "film"
+        self.layers = nn.ModuleList()
+        self.signal_dim: Optional[int] = None
+        self.cond_dim: Optional[int] = None
+        self._bound = False
+
+    def _resolve_widths(self, cond_dim: int, signal_dim: int) -> List[int]:
+        dims = [cond_dim]
+        for idx, width in enumerate(self.widths):
+            if width is Auto:
+                if idx != len(self.widths) - 1:
+                    raise ValueError("Auto widths supported only on the final FiLM layer.")
+                dims.append(2 * signal_dim)
+            else:
+                dims.append(int(width))
+        if dims[-1] != 2 * signal_dim:
+            raise ValueError("FiLMConditioner final width must equal 2 * signal dimension.")
+        return dims
+
+    def bind(self, input_dims: Dict[str, int]) -> None:
+        if "signal" not in input_dims or "cond" not in input_dims:
+            raise ValueError("FiLMConditioner requires 'signal' and 'cond' inputs.")
+        signal_dim = int(input_dims["signal"])
+        cond_dim = int(input_dims["cond"])
+        if signal_dim <= 0 or cond_dim <= 0:
+            raise ValueError("FiLMConditioner input dims must be positive.")
+        if self._bound:
+            if signal_dim != self.signal_dim or cond_dim != self.cond_dim:
+                raise ValueError("Cannot re-bind FiLMConditioner with different dimensions.")
+            return
+        dims = self._resolve_widths(cond_dim, signal_dim)
+        self.layers = nn.ModuleList(
+            [nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)]
+        )
+        self.signal_dim = signal_dim
+        self.cond_dim = cond_dim
+        self._bound = True
+
+    def _activation(self, tensor: torch.Tensor) -> torch.Tensor:
+        if self.act == "relu":
+            return F.relu(tensor)
+        if self.act == "gelu":
+            return F.gelu(tensor)
+        if self.act == "tanh":
+            return torch.tanh(tensor)
+        if self.act == "identity":
+            return tensor
+        raise ValueError(f"Unsupported activation {self.act}")
+
+    def forward(self, inputs: Dict[str, torch.Tensor]) -> torch.Tensor:
+        if not self.layers or self.signal_dim is None:
+            raise RuntimeError("FiLMConditioner.bind() must be called before forward().")
+        if "signal" not in inputs or "cond" not in inputs:
+            raise KeyError("FiLMConditioner forward requires 'signal' and 'cond' tensors.")
+        signal = inputs["signal"]
+        cond = inputs["cond"]
+        x = cond
+        for idx, layer in enumerate(self.layers):
+            x = layer(x)
+            if idx < len(self.layers) - 1:
+                x = self._activation(x)
+        gamma, beta = torch.split(x, self.signal_dim, dim=-1)
+        return signal * (gamma + 1.0) + beta
+
+    def infer_output_dim(self, input_dims: Dict[str, int]) -> Optional[int]:
+        signal_dim = input_dims.get("signal")
+        if signal_dim is None:
+            signal_dim = input_dims.get("in.signal")
+        if signal_dim is not None:
+            return int(signal_dim)
+        if self.signal_dim is not None:
+            return self.signal_dim
+        return None
+
 class Elementwise(nn.Module):
     """
     Prototype: simple elementwise operations between two inputs.
