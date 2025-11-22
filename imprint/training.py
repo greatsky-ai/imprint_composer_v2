@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
 
 import torch
 
@@ -10,6 +10,9 @@ from .data_helper import SequenceDataset
 
 Batch = Dict[str, torch.Tensor]
 LossFn = Optional[Callable[[Graph, Batch], torch.Tensor]]
+
+if TYPE_CHECKING:
+    from .diagnostics import GradientWatcher
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,8 @@ class Trainer:
         val_dataset: Optional[SequenceDataset] = None,
         val_loss_fn: LossFn = None,
         val_metric_fn: LossFn = None,
+        grad_monitor: Optional["GradientWatcher"] = None,
+        grad_summary_top_k: Optional[int] = 5,
     ) -> None:
         self.graph = graph
         self.dataset = dataset
@@ -53,6 +58,8 @@ class Trainer:
         self.val_loss_fn = val_loss_fn
         self.val_metric_fn = val_metric_fn
         self.optimizer: Optional[torch.optim.Optimizer] = None
+        self.grad_monitor = grad_monitor
+        self.grad_summary_top_k = grad_summary_top_k
 
     def run(self, *, seed: Optional[int] = None) -> List[float]:
         if seed is not None:
@@ -132,6 +139,7 @@ class Trainer:
                         f"[epoch {epoch}] step {step}/{self.dataset.batches_per_epoch} "
                         f"loss={last_loss_value:.4f}"
                     )
+                self._log_gradient_summary()
 
         avg_metric = (total_metric / steps) if (self.metric_fn is not None and steps > 0) else None
         avg_loss = total_loss / self.dataset.batches_per_epoch
@@ -199,6 +207,18 @@ class Trainer:
             return self.graph.loss()
         return hook(self.graph, batch)
 
+    def _log_gradient_summary(self) -> None:
+        if self.grad_monitor is None:
+            return
+        summary = self.grad_monitor.pop_summary(top_k=self.grad_summary_top_k)
+        if summary is None:
+            return
+        text = summary.to_text()
+        if not text:
+            return
+        for line in text.splitlines():
+            print(f"    {line}")
+
 
 def train_graph(
     graph: Graph,
@@ -218,6 +238,8 @@ def train_graph(
     val_every: int = 1,
     val_loss_fn: LossFn = None,
     val_metric_fn: LossFn = None,
+    grad_monitor: Optional["GradientWatcher"] = None,
+    grad_summary_top_k: Optional[int] = 5,
 ) -> List[float]:
     """
     Train a graph on a SequenceDataset using an optimizer-backed loop.
@@ -243,5 +265,7 @@ def train_graph(
         val_dataset=val_dataset,
         val_loss_fn=val_loss_fn,
         val_metric_fn=val_metric_fn,
+        grad_monitor=grad_monitor,
+        grad_summary_top_k=grad_summary_top_k,
     )
     return trainer.run(seed=seed)

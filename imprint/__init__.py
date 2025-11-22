@@ -30,6 +30,7 @@ from .recipes import (
     combined_graph_and_ce_loss,
     attach_task_head,
 )
+from .diagnostics import GradientWatcher, GradientSummary, plot_gradient_heatmap
 from . import masks
 from . import protos
 
@@ -62,6 +63,9 @@ __all__ = [
     "trainer_kwargs_from_config",
     "combined_graph_and_ce_loss",
     "attach_task_head",
+    "GradientWatcher",
+    "GradientSummary",
+    "plot_gradient_heatmap",
     "masks",
     "protos",
 ]

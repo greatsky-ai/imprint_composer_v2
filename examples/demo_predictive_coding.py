@@ -36,6 +36,7 @@ CONFIG: Dict[str, object] = {
     "two_layers": True,
     "use_feedback": True,
     "confine_pc_gradients": True,
+    "log_gradients": False,
     "loss": {
         "rec": 0,
         "pred": 1,
@@ -288,6 +289,13 @@ def run() -> None:
     )
 
     graph = build_graph(dataset)
+    grad_monitor = None
+    if bool(cfg.get("log_gradients", False)):
+        grad_monitor = imprint.GradientWatcher(
+            graph,
+            track_ports=True,
+            track_edges=True,
+        )
 
     train_kwargs = imprint.trainer_kwargs_from_config(cfg, val_dataset=val_dataset)
     task_cfg = cfg.get("task", {})  # type: ignore[assignment]
@@ -312,10 +320,13 @@ def run() -> None:
     imprint.train_graph(
         graph,
         dataset,
+        grad_monitor=grad_monitor,
         **train_kwargs,  # type: ignore[arg-type]
     )
 
     print("Done.")
+    if grad_monitor is not None:
+        grad_monitor.close()
 
 
 if __name__ == "__main__":

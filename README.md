@@ -148,6 +148,35 @@ Notes:
 - Source modules remain trainable by their own objectives; only the task loss routed through the stop‑grad edge is blocked from flowing upstream.
 - See `examples/demo_predictive_coding.py`: the aux GRU consumes PC GRU latents via stop‑grad edges so the task head trains the aux path while PC layers train on their reconstruction/predictor losses.
 
+## Gradient diagnostics
+
+Understanding whether gradients are flowing (or being blocked) is often more informative than raw losses. The `imprint.diagnostics` helpers provide a lightweight way to inspect per-module, per-edge, and per-port gradients every few logging steps.
+
+- `imprint.GradientWatcher(graph, track_ports=True, track_edges=True)` registers parameter/activation hooks and accumulates L2 norms, max magnitudes, and zero fractions.
+- Pass the watcher to `imprint.train_graph(..., grad_monitor=watcher)` to print formatted gradient summaries alongside the existing loss breakdown. The predictive-coding demo exposes a `CONFIG["log_gradients"]` knob that enables this automatically.
+- Call `summary = watcher.pop_summary(top_k=5)` manually to inspect the latest stats, or `watcher.close()` to remove hooks.
+- For richer visualization, feed a `GradientSummary` into `imprint.plot_gradient_heatmap(summary, section="modules")` (matplotlib optional) to view hot/cold modules at a glance.
+
+Example:
+
+```python
+graph = build_graph(dataset)
+grad_monitor = imprint.GradientWatcher(graph, track_ports=True, track_edges=True)
+imprint.train_graph(
+    graph,
+    dataset,
+    epochs=cfg["epochs"],
+    lr=cfg["lr"],
+    grad_monitor=grad_monitor,
+)
+grad_monitor.close()
+```
+
+Use the summaries to quickly confirm that:
+- stop-grad edges are doing their job (port gradients drop to zero),
+- predictive layers confine their updates when `confine_pc_gradients=True`,
+- downstream heads are not starving (non-zero gradients on their parameters).
+
 
 ## Objectives: targets and regularization
 
