@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -298,11 +299,11 @@ def visualize_module_output(
     port: str = "out",
     mode: str = "trace",
     sample_index: Optional[int] = None,
-    time_index: Optional[int] = None,
+    time_index: Optional[int] = -1,
     max_traces: int = 16,
     collapse_to_square: bool = True,
     ax: Optional["matplotlib.axes.Axes"] = None,
-    show: bool = True,
+    save_path: str = "val_viz.png",
     title: Optional[str] = None,
 ) -> "matplotlib.axes.Axes":
     """
@@ -316,12 +317,13 @@ def visualize_module_output(
         mode: 'trace' to plot feature traces over time, 'frame' to render a single
             timestep as an image after reshaping to a square grid.
         sample_index: Optional explicit sequence index; defaults to a random pick.
-        time_index: Optional explicit timestep; defaults to a random tick.
+        time_index: Optional explicit timestep; defaults to the final tick (-1).
+            Negative indices count from the end (e.g., -1 → last tick).
         max_traces: Max number of feature traces to overlay (trace mode only).
         collapse_to_square: Pad/reshape feature vectors into the smallest square
             when rendering frames.
-        ax: Optional matplotlib axes to draw on.
-        show: Whether to call plt.show() after drawing.
+        ax: Optional matplotlib axes to draw on; when omitted, a new figure is created.
+        save_path: Filepath for the rendered PNG (default 'val_viz.png').
         title: Optional custom plot title.
     Returns:
         The matplotlib Axes containing the visualization.
@@ -342,6 +344,10 @@ def visualize_module_output(
     if sample_idx is None:
         sample_idx = int(torch.randint(dataset.num_sequences, (1,), device=dataset.data.device).item())
     sample_idx = int(sample_idx) % dataset.num_sequences
+    print(
+        "[visualize_module_output]"
+        f" module={module_name}.{port} mode={mode} sample={sample_idx}"
+    )
 
     batch = {"x": dataset.data[sample_idx : sample_idx + 1]}
     if dataset.labels is not None:
@@ -369,19 +375,34 @@ def visualize_module_output(
     ticks, feat_dim = seq.shape
     if ticks == 0:
         raise RuntimeError(f"Module {module_name}.{port} emitted zero timesteps.")
+    print(
+        "[visualize_module_output]"
+        f" output_shape=(ticks={ticks}, feat_dim={feat_dim})"
+    )
 
     tick_idx = time_index
     if tick_idx is None:
         tick_idx = int(torch.randint(ticks, (1,)).item())
-    tick_idx = max(0, min(int(tick_idx), ticks - 1))
+    else:
+        tick_idx = int(tick_idx)
+        if tick_idx < 0:
+            tick_idx = ticks + tick_idx
+    tick_idx = max(0, min(tick_idx, ticks - 1))
+    print(
+        "[visualize_module_output]"
+        f" using_tick={tick_idx}"
+    )
 
     if mode not in ("trace", "frame"):
         raise ValueError("mode must be 'trace' or 'frame'.")
 
+    fig: Optional["matplotlib.figure.Figure"] = None
     if ax is None:
-        _, ax = plt.subplots(
+        fig, ax = plt.subplots(
             figsize=(10, 4) if mode == "trace" else (4, 4)
         )
+    else:
+        fig = ax.figure
 
     resolved_title = title or f"{module_name}.{port} ({mode})"
 
@@ -406,9 +427,16 @@ def visualize_module_output(
         ax.axis("off")
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
-    if show:
-        plt.tight_layout()
-        plt.show(block=False)
+    if fig is None:
+        fig = ax.figure
+    fig.tight_layout()
+    abs_path = os.path.abspath(save_path)
+    fig.savefig(abs_path, dpi=150)
+    print(
+        "[visualize_module_output]"
+        f" saved_path={abs_path}"
+    )
+    plt.close(fig)
     return ax
 
 

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import torch
 
 from .core import Graph
+from . import diagnostics as imprint_diagnostics
 from .data_helper import SequenceDataset
 
 Batch = Dict[str, torch.Tensor]
@@ -48,6 +50,7 @@ class Trainer:
         val_metric_fn: LossFn = None,
         grad_monitor: Optional["GradientWatcher"] = None,
         grad_summary_top_k: Optional[int] = 5,
+        viz_config: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.graph = graph
         self.dataset = dataset
@@ -60,6 +63,7 @@ class Trainer:
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.grad_monitor = grad_monitor
         self.grad_summary_top_k = grad_summary_top_k
+        self.viz_config = dict(viz_config) if viz_config is not None else None
 
     def run(self, *, seed: Optional[int] = None) -> List[float]:
         if seed is not None:
@@ -69,12 +73,14 @@ class Trainer:
             stats = self._train_epoch(epoch)
             history.append(stats.avg_loss)
             self._log_epoch(epoch, stats)
+            self._maybe_visualize(epoch, split="train")
             if (
                 self.val_dataset is not None
                 and self.config.val_every > 0
                 and (epoch % self.config.val_every) == 0
             ):
                 self._log_validation(epoch)
+                self._maybe_visualize(epoch, split="val")
         return history
 
     def _train_epoch(self, epoch: int) -> EpochStats:
@@ -219,6 +225,39 @@ class Trainer:
         for line in text.splitlines():
             print(f"    {line}")
 
+    def _maybe_visualize(self, epoch: int, split: str) -> None:
+        if not self.viz_config:
+            return
+        if split == "train":
+            sample_dataset = self.dataset
+        elif split == "val":
+            if self.val_dataset is None:
+                return
+            sample_dataset = self.val_dataset
+        else:
+            return
+
+        split_cfg = self.viz_config.get(split, {})
+        if not split_cfg.get("enabled", False):
+            return
+        module_name = str(split_cfg.get("module", "pc0_decoder"))
+        port = str(split_cfg.get("port", "out"))
+        mode = str(split_cfg.get("mode", "frame"))
+        save_path = split_cfg.get("path")
+        if save_path is None:
+            save_dir = str(split_cfg.get("dir", "."))
+            filename = str(split_cfg.get("filename", f"{split}_viz_epoch{epoch:03d}.png"))
+            save_path = os.path.join(save_dir, filename)
+        imprint_diagnostics.visualize_module_output(
+            self.graph,
+            sample_dataset,
+            module_name=module_name,
+            port=port,
+            mode=mode,
+            save_path=save_path,
+            title=f"{module_name}.{port} ({mode}) epoch={epoch} split={split}",
+        )
+
 
 def train_graph(
     graph: Graph,
@@ -240,6 +279,7 @@ def train_graph(
     val_metric_fn: LossFn = None,
     grad_monitor: Optional["GradientWatcher"] = None,
     grad_summary_top_k: Optional[int] = 5,
+    viz_config: Optional[Dict[str, Any]] = None,
 ) -> List[float]:
     """
     Train a graph on a SequenceDataset using an optimizer-backed loop.
@@ -267,5 +307,6 @@ def train_graph(
         val_metric_fn=val_metric_fn,
         grad_monitor=grad_monitor,
         grad_summary_top_k=grad_summary_top_k,
+        viz_config=viz_config,
     )
     return trainer.run(seed=seed)

@@ -26,7 +26,7 @@ CONFIG: Dict[str, object] = {
     "seed": 5,
     "epochs": 5,
     "lr": 2e-3,
-    "log_every": 5,
+    "log_every": 1,
     "val_every": 1,
     #"grad_clip": 1.0,
     "use_adamw": True,
@@ -78,7 +78,7 @@ CONFIG: Dict[str, object] = {
     },
     "data": {
         "path": "solids_6class_32x32.h5",
-        "batch_size": 96,
+        "batch_size": 192,
         "synth_total": 320,
         "synth_seq_len": 160,
         "synth_feature_dim": 64,
@@ -334,6 +334,7 @@ def build_graph(dataset: SequenceDataset) -> imprint.Graph:
 def run() -> None:
     cfg = CONFIG
     data_cfg = dict(cfg["data"])  # type: ignore[index]
+    output_dir = os.path.dirname(os.path.abspath(__file__))
 
     dataset, val_dataset = imprint.load_train_val_splits(
         data_cfg,
@@ -370,28 +371,25 @@ def run() -> None:
                 label_key=label_key,
             )
 
+    viz_cfg = {
+        "train": {"enabled": False},
+        "val": {
+            "enabled": bool(cfg.get("visualize_val_sample", False)),
+            "module": cfg.get("visualize_val_module", "pc0_decoder"),
+            "port": cfg.get("visualize_val_port", "out"),
+            "mode": cfg.get("visualize_val_mode", "frame"),
+            "dir": output_dir,
+            "filename": cfg.get("visualize_val_path", "val_viz.png"),
+        },
+    }
+
     imprint.train_graph(
         graph,
         dataset,
         grad_monitor=grad_monitor,
+        viz_config=viz_cfg,
         **train_kwargs,  # type: ignore[arg-type]
     )
-
-    if bool(cfg.get("visualize_val_sample", False)):
-        if val_dataset is None:
-            print("visualize_val_sample=True but validation split is disabled.")
-        else:
-            module_name = str(cfg.get("visualize_val_module", "pc0_decoder"))
-            port_name = str(cfg.get("visualize_val_port", "out"))
-            mode = str(cfg.get("visualize_val_mode", "frame"))
-            imprint.visualize_module_output(
-                graph,
-                val_dataset,
-                module_name=module_name,
-                port=port_name,
-                mode=mode,
-                title=f"{module_name}.{port_name} ({mode})",
-            )
 
     print("Done.")
     if grad_monitor is not None:
