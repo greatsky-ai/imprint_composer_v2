@@ -371,17 +371,31 @@ def run() -> None:
                 label_key=label_key,
             )
 
-    viz_cfg = {
-        "train": {"enabled": False},
-        "val": {
-            "enabled": bool(cfg.get("visualize_val_sample", False)),
-            "module": cfg.get("visualize_val_module", "pc0_decoder"),
-            "port": cfg.get("visualize_val_port", "out"),
-            "mode": cfg.get("visualize_val_mode", "frame"),
-            "dir": output_dir,
-            "filename": cfg.get("visualize_val_path", "val_viz.png"),
-        },
-    }
+    viz_entries: List[Dict[str, object]] = []
+    if bool(cfg.get("visualize_val_sample", False)):
+        viz_entries.append(
+            {
+                "enabled": True,
+                "module": cfg.get("visualize_val_module", "pc0_decoder"),
+                "port": cfg.get("visualize_val_port", "out"),
+                "mode": cfg.get("visualize_val_mode", "frame"),
+                "dir": output_dir,
+                "filename": cfg.get("visualize_val_path", "val_viz.png"),
+            }
+        )
+        if bool(cfg.get("visualize_val_compare_input", True)):
+            viz_entries.append(
+                {
+                    "enabled": True,
+                    "module": cfg.get("visualize_val_input_module", "src_x"),
+                    "port": cfg.get("visualize_val_input_port", "out"),
+                    "mode": cfg.get("visualize_val_mode", "frame"),
+                    "dir": output_dir,
+                    "filename": cfg.get("visualize_val_input_path", "val_input.png"),
+                }
+            )
+
+    viz_cfg = {"train": [], "val": viz_entries}
 
     imprint.train_graph(
         graph,

@@ -237,26 +237,39 @@ class Trainer:
         else:
             return
 
-        split_cfg = self.viz_config.get(split, {})
-        if not split_cfg.get("enabled", False):
+        split_cfg = self.viz_config.get(split)
+        if not split_cfg:
             return
-        module_name = str(split_cfg.get("module", "pc0_decoder"))
-        port = str(split_cfg.get("port", "out"))
-        mode = str(split_cfg.get("mode", "frame"))
-        save_path = split_cfg.get("path")
-        if save_path is None:
-            save_dir = str(split_cfg.get("dir", "."))
-            filename = str(split_cfg.get("filename", f"{split}_viz_epoch{epoch:03d}.png"))
-            save_path = os.path.join(save_dir, filename)
-        imprint_diagnostics.visualize_module_output(
-            self.graph,
-            sample_dataset,
-            module_name=module_name,
-            port=port,
-            mode=mode,
-            save_path=save_path,
-            title=f"{module_name}.{port} ({mode}) epoch={epoch} split={split}",
-        )
+        if isinstance(split_cfg, dict):
+            entries = [split_cfg]
+        elif isinstance(split_cfg, list):
+            entries = split_cfg
+        else:
+            return
+
+        for entry in entries:
+            if not entry or not entry.get("enabled", False):
+                continue
+            module_name = entry.get("module")
+            if not module_name:
+                continue
+            module_name = str(module_name)
+            port = str(entry.get("port", "out"))
+            mode = str(entry.get("mode", "frame"))
+            save_path = entry.get("path")
+            if save_path is None:
+                save_dir = str(entry.get("dir", "."))
+                filename = str(entry.get("filename", f"{split}_viz_epoch{epoch:03d}.png"))
+                save_path = os.path.join(save_dir, filename)
+            imprint_diagnostics.visualize_module_output(
+                self.graph,
+                sample_dataset,
+                module_name=module_name,
+                port=port,
+                mode=mode,
+                save_path=save_path,
+                title=f"{module_name}.{port} ({mode}) epoch={epoch} split={split}",
+            )
 
 
 def train_graph(
