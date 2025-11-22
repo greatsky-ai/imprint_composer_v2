@@ -38,6 +38,7 @@ CONFIG: Dict[str, object] = {
     "confine_pc_gradients": True,
     "log_gradients": False,
     "visualize_val_sample": True,
+    "input_scale": 200.0,
     "loss": {
         "rec": 0.5,
         "pred": 0,
@@ -341,6 +342,12 @@ def run() -> None:
         train_split=str(cfg["train_split"]),  # type: ignore[index]
         val_split=cfg.get("val_split", "val"),  # type: ignore[arg-type]
     )
+
+    scale = float(cfg.get("input_scale", 1.0))
+    if scale != 1.0:
+        imprint.scale_sequence_dataset(dataset, scale)
+        if val_dataset is not None:
+            imprint.scale_sequence_dataset(val_dataset, scale)
 
     graph = build_graph(dataset)
     grad_monitor = None

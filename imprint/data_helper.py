@@ -192,6 +192,20 @@ def load_demo_dataset(
     )
 
 
+def scale_sequence_dataset(dataset: SequenceDataset, factor: float) -> SequenceDataset:
+    """
+    Scale all signals (and optional labels) in-place by ``factor``.
+
+    Useful for emphasizing high-energy features without editing downstream graphs.
+    """
+    if factor == 1.0:
+        return dataset
+    dataset.data.mul_(factor)
+    if dataset.labels is not None:
+        dataset.labels.mul_(factor)
+    return dataset
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
