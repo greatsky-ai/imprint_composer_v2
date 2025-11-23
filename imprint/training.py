@@ -270,6 +270,31 @@ class Trainer:
                 save_path=save_path,
                 title=f"{module_name}.{port} ({mode}) epoch={epoch} split={split}",
             )
+            # Per-epoch simple stats log for this module's 'out' port on a deterministic batch.
+            try:
+                first_batch = next(sample_dataset.iter_batches(shuffle=False))
+                self.graph.rollout(first_batch)
+                module = self.graph.modules.get(module_name)
+                if module is not None and "out" in module.state.output:
+                    tensor = module.state.output["out"]
+                    if tensor.dim() == 2:
+                        tensor = tensor.unsqueeze(1)
+                    B, T, D = tensor.shape
+                    overall_std = float(tensor.std().item())
+                    std_over_time = float(tensor.std(dim=1).mean().item())
+                    std_over_feat = float(tensor.std(dim=2).mean().item())
+                    min_val = float(tensor.min().item())
+                    max_val = float(tensor.max().item())
+                    print(
+                        f"[monitor][epoch {epoch}][{split}] {module_name}.out "
+                        f"shape=[{B},{T},{D}] std_all={overall_std:.4e} "
+                        f"mean(std_over_time)={std_over_time:.4e} "
+                        f"mean(std_over_feat)={std_over_feat:.4e} "
+                        f"min={min_val:.4e} max={max_val:.4e}"
+                    )
+            except Exception:
+                # Best-effort monitoring; never fail the training loop.
+                pass
 
 
 def train_graph(

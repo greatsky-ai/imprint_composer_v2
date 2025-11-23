@@ -24,8 +24,8 @@ Auto = imprint.Auto
 
 CONFIG: Dict[str, object] = {
     "seed": 15,
-    "epochs": 35,
-    "lr": 0.5e-3,
+    "epochs": 11,
+    "lr": 1e-3,
     "log_every": 1,
     "val_every": 1,
     #"grad_clip": 1.0,
@@ -38,7 +38,7 @@ CONFIG: Dict[str, object] = {
     "confine_pc_gradients": True,
     "log_gradients": False,
     "visualize_val_sample": True,
-    "input_scale": 50.0,
+    "input_scale": 25.0,
     "loss": {
         "rec": 0.5,
         "pred": 0.5,
@@ -49,16 +49,16 @@ CONFIG: Dict[str, object] = {
             "name": "pc0",
             "hidden": 128,
             "layers": 1,
-            "decoder_widths": [32,128, Auto],
-            "out_dim": 32,
+            "decoder_widths": [256, Auto],
+            "out_dim": 16,
 
         },
         {
             "name": "pc1",
             "hidden": 128,
             "layers": 1,
-            "decoder_widths": [32,128, Auto],
-            "out_dim": 32,
+            "decoder_widths": [256, Auto],
+            "out_dim": 16,
         },
     ],
     "predictor_widths": [32,64, Auto],
@@ -239,7 +239,7 @@ def _register_objectives(
     if predictor is not None and pred_w > 0:
         predictor.objectives.mse(
             "out",
-            Targets.shifted_input(source, +1),
+            Targets.shifted_input(source, +3),
             weight=pred_w,
             name="pred",
         )
@@ -411,6 +411,35 @@ def run() -> None:
         viz_config=viz_cfg,
         **train_kwargs,  # type: ignore[arg-type]
     )
+
+    # Simple post-train monitoring: decoder variability across batch/time on a val batch.
+    try:
+        import torch  # type: ignore
+        if val_dataset is not None:
+            first_batch = next(val_dataset.iter_batches(shuffle=False))
+        else:
+            first_batch = next(dataset.iter_batches(shuffle=False))
+        graph.rollout(first_batch)
+        mod_name = str(cfg.get("visualize_val_module", "pc0_decoder"))
+        if mod_name in graph.modules and "out" in graph.modules[mod_name].state.output:
+            tensor = graph.modules[mod_name].state.output["out"]  # [B, T, D]
+            if tensor.dim() == 2:
+                tensor = tensor.unsqueeze(1)
+            B, T, D = tensor.shape
+            overall_std = float(tensor.std().item())
+            std_over_time = float(tensor.std(dim=1).mean().item())     # variability across ticks
+            std_over_feat = float(tensor.std(dim=2).mean().item())     # variability across features
+            min_val = float(tensor.min().item())
+            max_val = float(tensor.max().item())
+            print(
+                f"[monitor] {mod_name}.out stats on {'val' if val_dataset is not None else 'train'} batch: "
+                f"shape=[{B},{T},{D}] std_all={overall_std:.4e} "
+                f"mean(std_over_time)={std_over_time:.4e} mean(std_over_feat)={std_over_feat:.4e} "
+                f"min={min_val:.4e} max={max_val:.4e}"
+            )
+    except Exception as _exc:
+        # Best-effort logging only; keep demo robust.
+        pass
 
     print("Done.")
     if grad_monitor is not None:
