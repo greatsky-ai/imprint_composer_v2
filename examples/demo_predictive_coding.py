@@ -30,7 +30,7 @@ CONFIG: Dict[str, object] = {
     "val_every": 1,
     #"grad_clip": 1.0,
     "use_adamw": True,
-    "weight_decay": 1e-4,
+    "weight_decay": 4e-2,
     "train_split": "train",
     "val_split": "val",
     "two_layers": True,
@@ -47,7 +47,7 @@ CONFIG: Dict[str, object] = {
     "layers": [
         {
             "name": "pc0",
-            "hidden": 256,
+            "hidden": 64,
             "layers": 1,
             "decoder_widths": [32, Auto],
             "out_dim": 16,
@@ -55,7 +55,7 @@ CONFIG: Dict[str, object] = {
         },
         {
             "name": "pc1",
-            "hidden": 256,
+            "hidden": 32,
             "layers": 1,
             "decoder_widths": [32, Auto],
             "out_dim": 16,
