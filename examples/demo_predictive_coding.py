@@ -30,38 +30,38 @@ CONFIG: Dict[str, object] = {
     "val_every": 1,
     #"grad_clip": 1.0,
     "use_adamw": True,
-    "weight_decay": 1e-2,
+    "weight_decay": 1e-4,
     "train_split": "train",
     "val_split": "val",
-    "two_layers": False,
+    "two_layers": True,
     "use_feedback": True,
     "confine_pc_gradients": True,
     "log_gradients": False,
     "visualize_val_sample": True,
-    "input_scale": 25.0,
+    "input_scale": 3.0,
     "loss": {
         "rec": 0.5,
-        "pred": 0.5,
+        "pred": 0.8,
         "sparse_err": 0,
     },
     "layers": [
         {
             "name": "pc0",
-            "hidden": 128,
+            "hidden": 256,
             "layers": 1,
-            "decoder_widths": [256, Auto],
+            "decoder_widths": [32, Auto],
             "out_dim": 16,
 
         },
         {
             "name": "pc1",
-            "hidden": 128,
+            "hidden": 256,
             "layers": 1,
-            "decoder_widths": [256, Auto],
+            "decoder_widths": [32, Auto],
             "out_dim": 16,
         },
     ],
-    "predictor_widths": [32,64, Auto],
+    "predictor_widths": [128, Auto],
     "film_widths": [Auto],
     # Task head configuration (aux GRU consumes all PC GRU latents)
     "task": {
@@ -78,7 +78,7 @@ CONFIG: Dict[str, object] = {
         "stop_grad": True,    # detach gradients from PC GRU outputs into aux (prevents upstream updates)
     },
     "data": {
-        "path": "synthetic_video.h5",
+        "path": "solids_16x16.h5",
         "batch_size": 192,
         "synth_total": 320,
         "synth_seq_len": 160,
@@ -148,7 +148,10 @@ def _add_pc_layer(
     edge = graph.connect(signal_src, err["in.x"])
     if bool(CONFIG.get("confine_pc_gradients", False)):
         edge.set_stop_grad(True)
-    graph.connect(decoder["out"], err["in.pred"])
+    # Freeze both error-path projections to identity so reconstruction is measured in the err space.
+    edge.set_identity(True)
+    pred_edge = graph.connect(decoder["out"], err["in.pred"])
+    pred_edge.set_identity(True)
 
     film = None
     drive_src = err["out"]
@@ -231,6 +234,7 @@ def _register_objectives(
     for layer in layers:
         decoder = layer["decoder"]
         err = layer["err"]
+        # Keep targets in the err space, but edges into err are identity/frozen (see _add_pc_layer).
         target = Targets.port_drive(err, "in.x")
         decoder.objectives.mse("out", target, weight=rec_w, name="rec")
         if sparse_w > 0:
@@ -401,6 +405,18 @@ def run() -> None:
                     "filename": cfg.get("visualize_val_input_path", "val_input.png"),
                 }
             )
+        viz_entries.append(
+            {
+                "enabled": float(cfg.get("loss", {}).get("pred", 0.0)) > 0.0,
+                "module": cfg.get("visualize_val_pred_module", "pc_pred_head"),
+                "port": cfg.get("visualize_val_pred_port", "out"),
+                "mode": cfg.get(
+                    "visualize_val_pred_mode", cfg.get("visualize_val_mode", "frame")
+                ),
+                "dir": output_dir,
+                "filename": cfg.get("visualize_val_pred_path", "val_pred.png"),
+            }
+        )
 
     viz_cfg = {"train": [], "val": viz_entries}
 

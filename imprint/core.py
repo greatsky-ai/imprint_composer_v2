@@ -308,6 +308,8 @@ class Edge:
         # When True, gradients are not propagated into the source activations
         # (but still flow into this edge's projection and downstream modules).
         self.stop_grad: bool = False
+        # When True, this edge behaves as an identity pass-through (no projection).
+        self._force_identity: bool = False
 
     def constrain(
         self,
@@ -326,6 +328,13 @@ class Edge:
 
     def set_stop_grad(self, stop: bool = True) -> None:
         self.stop_grad = bool(stop)
+
+    def set_identity(self, enable: bool = True) -> None:
+        """
+        Request that this edge use an identity mapping (no projection).
+        Dimensions must match at bind-time; otherwise, an error is raised.
+        """
+        self._force_identity = bool(enable)
 
 
 class ModuleState:
@@ -1212,6 +1221,15 @@ class Graph:
             dst_dim = self._edge_destination_dim(edge)
             if src_dim is None or dst_dim is None:
                 raise ValueError(f"Edge {edge.name} has unresolved dimensions.")
+            # Honor explicit identity requests by skipping projection materialization.
+            if getattr(edge, "_force_identity", False):
+                if int(src_dim) != int(dst_dim):
+                    raise ValueError(
+                        f"Identity projection requested for edge {edge.name} but dims differ: "
+                        f"src={src_dim} dst={dst_dim}"
+                    )
+                edge.proj = None
+                continue
             device = self._module_devices[edge.dst.module.name]
             if edge.proj is None:
                 edge.proj = MaskedLinear(src_dim, dst_dim).to(device)
