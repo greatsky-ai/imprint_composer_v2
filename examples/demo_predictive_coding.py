@@ -38,10 +38,10 @@ CONFIG: Dict[str, object] = {
     "confine_pc_gradients": True,
     "log_gradients": False,
     "visualize_val_sample": True,
-    "input_scale": 10.0,
+    "input_scale": 1.0,
     "loss": {
         "rec": 1,
-        "pred": 0,
+        "pred": 1,
         "sparse_err": 0,
     },
     "layers": [
@@ -243,7 +243,7 @@ def _register_objectives(
     if predictor is not None and pred_w > 0:
         predictor.objectives.mse(
             "out",
-            Targets.shifted_input(source, +3),
+            Targets.shifted_input(source, +8),
             weight=pred_w,
             name="pred",
         )
