@@ -35,7 +35,7 @@ CONFIG = {
     "train_split": "train",
     "val_split": "val",
     "data": {
-        "path": "solids_32x32.h5",  # Optional HDF5 dataset path
+        "path": "synthetic_video.h5",  # Optional HDF5 dataset path
         "batch_size": 128,
         "synth_total": 320,
         "synth_seq_len": 160,

@@ -24,7 +24,7 @@ Auto = imprint.Auto
 
 CONFIG: Dict[str, object] = {
     "seed": 15,
-    "epochs": 15,
+    "epochs": 35,
     "lr": 0.5e-3,
     "log_every": 1,
     "val_every": 1,
@@ -38,10 +38,10 @@ CONFIG: Dict[str, object] = {
     "confine_pc_gradients": True,
     "log_gradients": False,
     "visualize_val_sample": True,
-    "input_scale": 500.0,
+    "input_scale": 50.0,
     "loss": {
-        "rec": 1,
-        "pred": 0,
+        "rec": 0.5,
+        "pred": 0.5,
         "sparse_err": 0,
     },
     "layers": [
@@ -49,7 +49,7 @@ CONFIG: Dict[str, object] = {
             "name": "pc0",
             "hidden": 128,
             "layers": 1,
-            "decoder_widths": [256, Auto],
+            "decoder_widths": [32,128, Auto],
             "out_dim": 32,
 
         },
@@ -57,11 +57,11 @@ CONFIG: Dict[str, object] = {
             "name": "pc1",
             "hidden": 128,
             "layers": 1,
-            "decoder_widths": [256, Auto],
+            "decoder_widths": [32,128, Auto],
             "out_dim": 32,
         },
     ],
-    "predictor_widths": [256, Auto],
+    "predictor_widths": [32,64, Auto],
     "film_widths": [Auto],
     # Task head configuration (aux GRU consumes all PC GRU latents)
     "task": {
@@ -78,7 +78,7 @@ CONFIG: Dict[str, object] = {
         "stop_grad": True,    # detach gradients from PC GRU outputs into aux (prevents upstream updates)
     },
     "data": {
-        "path": "solids_6class_32x32.h5",
+        "path": "synthetic_video.h5",
         "batch_size": 192,
         "synth_total": 320,
         "synth_seq_len": 160,

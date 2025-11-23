@@ -41,7 +41,7 @@ CONFIG = {
     "train_split": "train",
     "val_split": "val",
     "data": {
-        "path": "solids_32x32.h5",
+        "path": "synthetic_video.h5",
         "batch_size": 128,
         "synth_total": 320,
         "synth_seq_len": 160,
