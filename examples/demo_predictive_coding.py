@@ -38,10 +38,10 @@ CONFIG: Dict[str, object] = {
     "confine_pc_gradients": True,
     "log_gradients": False,
     "visualize_val_sample": True,
-    "input_scale": 1.0,
+    "input_scale": 11.0,
     "loss": {
         "rec": 1,
-        "pred": 1,
+        "pred": 0,
         "sparse_err": 0,
     },
     "layers": [
@@ -78,7 +78,7 @@ CONFIG: Dict[str, object] = {
         "stop_grad": True,    # detach gradients from PC GRU outputs into aux (prevents upstream updates)
     },
     "data": {
-        "path": "synthetic_video.h5",
+        "path": "solids_16x16.h5",
         "batch_size": 192,
         "synth_total": 320,
         "synth_seq_len": 160,
