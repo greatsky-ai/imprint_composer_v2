@@ -27,6 +27,8 @@ Imprint is a minimal, shapes‑driven toolkit for building and training modular 
   - Edge‑level stop‑gradient lets you block gradients from flowing back into a source module while still training the edge projection and downstream modules (ideal for auxiliary heads that should not steer backbone encoders).
 - Prototypes (protos)
   - `GRUStack` with `bind(input_dim)` and single‑step `step(drive, state)`; optional layernorm.
+  - `MemoryGRU` enforces the simple-GRU motif (disabled reset gate) and freezes update-gate
+    biases to a configurable range for persistent memory behavior.
   - `MLP` with Auto final width (derived from objectives or outputs).
   - `Aggregator` for grouped inputs (`concat` or `sum` then `Linear`).
   - `Elementwise` for simple tensor ops (e.g., `sub→abs`).
@@ -203,6 +205,14 @@ Use the summaries to quickly confirm that:
   - `bind(input_dim)` allocates cells; `init_state(batch_size, device)` allocates `[layers, B, hidden]`.
   - Optional `reset_every` zeros the hidden state on a fixed cadence (e.g., per chunk for slicer encoders).
   - `step(drive, state)` returns `(new_state, [layer_outputs...])` with final output used as module `out`.
+- `MemoryGRU(hidden, layers=1, update_bias_min=-1.0, update_bias_max=1.0, layernorm=False, out_dim=None)`
+  - Inherits the single-step API and permanently disables the reset gate (simple-GRU motif) so the module
+    behaves like a leaky integrator.
+  - The update gate biases are initialized from a linear distribution between `[min, max]` (per neuron)
+    and are frozen for the duration of training; they can be tuned per layer/spec or extended to other
+    distributions later.
+  - Optional `out_dim` projection and trailing `LayerNorm` keep the proto compatible with existing graph
+    contracts (`bind()`, `init_state()`, `step()`, `expose_output()`).
 - `MLP(widths=[..., Auto], act="relu")`
   - `bind(input_dim, output_dim)` constructs linear stack; final width can be `Auto` and inferred.
 - `Aggregator(mode="concat→linear", out_dim)`

@@ -127,6 +127,181 @@ class GRUStack(nn.Module):
         return x
 
 
+class MemoryGRU(nn.Module):
+    """
+    Prototype: GRU stack in simple-GRU mode with frozen update-gate biases.
+
+    - Reset gates are permanently disabled (weights/biases masked to keep the gate at ~1).
+    - Update gate biases are initialized from a configurable distribution and frozen thereafter.
+    - Optional output projection followed by optional layer normalization.
+    """
+
+    def __init__(
+        self,
+        hidden: int,
+        layers: int = 1,
+        *,
+        input_size: Optional[int] = None,
+        out_dim: Optional[int] = None,
+        layernorm: bool = False,
+        update_bias_min: float = -1.0,
+        update_bias_max: float = 1.0,
+        update_bias_distribution: str = "linear",
+        reset_gate_bias_value: float = 10.0,
+    ) -> None:
+        super().__init__()
+        if layers < 1:
+            raise ValueError("layers must be >= 1")
+        if update_bias_max < update_bias_min:
+            raise ValueError("update_bias_max must be >= update_bias_min")
+        self.hidden = hidden
+        self.layers = layers
+        self.input_size = input_size
+        self.out_dim: Optional[int] = int(out_dim) if out_dim is not None else None
+        self.layernorm = bool(layernorm)
+        self.update_bias_min = float(update_bias_min)
+        self.update_bias_max = float(update_bias_max)
+        self.update_bias_distribution = str(update_bias_distribution).lower()
+        self.reset_gate_bias_value = float(reset_gate_bias_value)
+
+        self.cells = nn.ModuleList()
+        self.out_proj: Optional[nn.Linear] = None
+        self.final_norm: Optional[nn.LayerNorm] = None
+
+        self._weight_constraints: List[Tuple[nn.Parameter, torch.Tensor]] = []
+        self._reset_bias_constraints: List[Tuple[nn.Parameter, torch.Tensor, torch.Tensor]] = []
+        self._update_bias_constraints: List[Tuple[nn.Parameter, slice, torch.Tensor]] = []
+
+        if input_size is not None:
+            self._build_cells(input_size)
+
+    def _build_cells(self, input_size: int) -> None:
+        prev_dim = input_size
+        self.cells = nn.ModuleList()
+        self._weight_constraints = []
+        self._reset_bias_constraints = []
+        self._update_bias_constraints = []
+        for _ in range(self.layers):
+            cell = nn.GRUCell(prev_dim, self.hidden)
+            self.cells.append(cell)
+            self._register_simple_gru_constraints(cell)
+            prev_dim = self.hidden
+        self._enforce_constraints()
+
+    def _register_simple_gru_constraints(self, cell: nn.GRUCell) -> None:
+        hidden_size = cell.hidden_size
+        reset_slice = slice(0, hidden_size)
+        update_slice = slice(hidden_size, 2 * hidden_size)
+        bias_profile = self._create_update_bias_profile(hidden_size)
+
+        for name, param in cell.named_parameters():
+            if name.startswith("weight_"):
+                mask = torch.ones_like(param.data)
+                mask[reset_slice, ...] = 0
+                self._weight_constraints.append((param, mask))
+                param.register_hook(self._make_grad_mask_hook(mask))
+            elif name.startswith("bias_"):
+                mask = torch.ones_like(param.data)
+                mask[reset_slice] = 0
+                add_vec = torch.zeros_like(param.data)
+                add_vec[reset_slice] = self.reset_gate_bias_value
+                self._reset_bias_constraints.append((param, mask, add_vec))
+
+                grad_mask = torch.ones_like(param.data)
+                grad_mask[reset_slice] = 0
+                grad_mask[update_slice] = 0
+                param.register_hook(self._make_grad_mask_hook(grad_mask))
+
+                if name.startswith("bias_ih"):
+                    target = bias_profile.clone()
+                else:
+                    target = torch.zeros_like(bias_profile)
+                self._update_bias_constraints.append((param, update_slice, target))
+
+    def bind(self, input_dim: int) -> None:
+        if self.input_size is not None and self.input_size != input_dim:
+            raise ValueError(f"MemoryGRU expected input_dim {self.input_size}, got {input_dim}")
+        if self.input_size is None:
+            self.input_size = input_dim
+            self._build_cells(input_dim)
+        if self.out_dim is not None and self.out_proj is None:
+            self.out_proj = nn.Linear(self.hidden, self.out_dim)
+        final_dim = self.out_dim if self.out_dim is not None else self.hidden
+        if self.layernorm and self.final_norm is None:
+            self.final_norm = nn.LayerNorm(final_dim)
+
+    def init_state(self, batch_size: int, device: Optional[torch.device] = None) -> torch.Tensor:
+        if self.input_size is None:
+            raise RuntimeError("MemoryGRU.bind() must be called before init_state.")
+        shape = (self.layers, batch_size, self.hidden)
+        return torch.zeros(shape, device=device)
+
+    def _create_update_bias_profile(self, hidden_size: int) -> torch.Tensor:
+        dist = self.update_bias_distribution
+        if dist == "linear":
+            return torch.linspace(
+                self.update_bias_min,
+                self.update_bias_max,
+                steps=hidden_size,
+                dtype=torch.float32,
+            )
+        raise ValueError(f"Unsupported update_bias_distribution '{self.update_bias_distribution}'")
+
+    @staticmethod
+    def _make_grad_mask_hook(mask: torch.Tensor):
+        frozen = mask.clone().detach()
+
+        def _hook(grad: torch.Tensor) -> torch.Tensor:
+            return grad * frozen.to(grad.device)
+
+        return _hook
+
+    def _enforce_constraints(self) -> None:
+        for param, mask in self._weight_constraints:
+            param.data.mul_(mask.to(param.data.device))
+        for param, mask, add_vec in self._reset_bias_constraints:
+            device = param.data.device
+            param.data.mul_(mask.to(device))
+            param.data.add_(add_vec.to(device))
+        for param, slc, target in self._update_bias_constraints:
+            device = param.data.device
+            param.data[slc] = target.to(device)
+
+    def step(
+        self,
+        drive: torch.Tensor,
+        state: torch.Tensor,
+    ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
+        if not self.cells:
+            raise RuntimeError("MemoryGRU.bind() must be called before step().")
+        self._enforce_constraints()
+
+        batch_size = drive.shape[0]
+        if state.shape[0] != self.layers or state.shape[1] != batch_size:
+            raise ValueError("State shape mismatch for MemoryGRU.")
+
+        layer_outputs: List[torch.Tensor] = []
+        next_states = []
+        layer_input = drive
+        for idx, cell in enumerate(self.cells):
+            layer_state = state[idx]
+            updated = cell(layer_input, layer_state)
+            layer_outputs.append(updated)
+            next_states.append(updated)
+            layer_input = updated
+
+        stacked = torch.stack(next_states, dim=0)
+        return stacked, layer_outputs
+
+    def expose_output(self, last_hidden: torch.Tensor) -> torch.Tensor:
+        x = last_hidden
+        if self.out_proj is not None:
+            x = self.out_proj(x)
+        if self.final_norm is not None:
+            x = self.final_norm(x)
+        return x
+
+
 class MLP(nn.Module):
     """
     Prototype: simple multilayer perceptron supporting Auto dims.

@@ -51,7 +51,13 @@ CONFIG: Dict[str, object] = {
             "layers": 1,
             "decoder_widths": [32, Auto],
             "out_dim": 16,
-
+            "memory_gru": {
+                "enabled": True,
+                "update_bias_min": -0.5,
+                "update_bias_max": 1.5,
+                "update_bias_distribution": "linear",
+                "layernorm": True,
+            },
         },
         {
             "name": "pc1",
@@ -86,6 +92,34 @@ CONFIG: Dict[str, object] = {
         "synth_seed": 13,
     },
 }
+
+
+def _make_pc_gru_proto(
+    spec: Dict[str, object]
+) -> imprint.protos.GRUStack | imprint.protos.MemoryGRU:
+    hidden = int(spec["hidden"])
+    layers = int(spec.get("layers", 1))
+    out_dim = spec.get("out_dim", None)
+
+    memory_cfg = spec.get("memory_gru", None)
+    if isinstance(memory_cfg, dict) and memory_cfg.get("enabled", False):
+        return imprint.protos.MemoryGRU(
+            hidden=hidden,
+            layers=layers,
+            out_dim=None if out_dim is None else int(out_dim),
+            layernorm=bool(memory_cfg.get("layernorm", False)),
+            update_bias_min=float(memory_cfg.get("update_bias_min", -1.0)),
+            update_bias_max=float(memory_cfg.get("update_bias_max", 1.0)),
+            update_bias_distribution=str(memory_cfg.get("update_bias_distribution", "linear")),
+            reset_gate_bias_value=float(memory_cfg.get("reset_gate_bias_value", 10.0)),
+        )
+
+    return imprint.protos.GRUStack(
+        hidden=hidden,
+        layers=layers,
+        layernorm=True,
+        out_dim=None if out_dim is None else int(out_dim),
+    )
 
 
 def _add_pc_layer(
@@ -127,15 +161,9 @@ def _add_pc_layer(
             out_default=Auto,
         ),
     )
-    gru_out_dim = spec.get("out_dim", None)
     gru = imprint.Module(
         name=f"{base}_gru",
-        proto=imprint.protos.GRUStack(
-            hidden=hidden,
-            layers=layers,
-            layernorm=True,
-            out_dim=(None if gru_out_dim is None else int(gru_out_dim)),  # type: ignore[arg-type]
-        ),
+        proto=_make_pc_gru_proto(spec),
         ports=imprint.Ports(
             in_=imprint.InPort(size=Auto, combine="concat"),
             out_default=Auto,  # let graph infer from proto.out_dim or hidden
